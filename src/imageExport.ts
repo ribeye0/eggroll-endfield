@@ -12,7 +12,7 @@ import { TRANSLATIONS, type Locale } from "./i18n";
 import { localizeItemName, localizePoolName } from "./itemI18n";
 
 export type ImageFormat = "png" | "jpeg" | "webp";
-export type UpscaleFactor = 1 | 2 | 3 | 4;
+export type UpscaleFactor = 1 | 2 | 3;
 export type ImageWidth = 680 | 780 | 900;
 export type FontScale = 0.9 | 1 | 1.15 | 1.3;
 
@@ -98,7 +98,7 @@ export async function renderStatsToImageBytes(params: {
     fontScale = 1,
     historyLimit = 10,
     groupByPool = true,
-    poolLimit = 5,
+    poolLimit = 3,
   } = params;
   const tr = TRANSLATIONS[locale];
   const pal = theme === "light" ? LIGHT_PALETTE : DARK_PALETTE;

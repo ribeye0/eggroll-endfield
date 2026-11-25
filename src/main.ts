@@ -107,12 +107,12 @@ const state = {
   manualServerId: "auto",
   imgModalOpen: false,
   imgFormat: "png" as ImageFormat,
-  imgScale: 3 as UpscaleFactor,
+  imgScale: 2 as UpscaleFactor,
   imgWidth: 780 as ImageWidth,
   imgFontScale: 1 as FontScale,
   imgHistoryLimit: 10 as number | "all",
   imgGroupByPool: true,
-  imgPoolLimit: 5 as number | "all",
+  imgPoolLimit: 3 as number | "all",
 };
 
 const MIN_ZOOM = 0.8;
@@ -948,9 +948,8 @@ function renderImageModal(): string {
           <div class="row">
             <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgScale)}</span>
             <button class="${state.imgScale === 1 ? "active" : ""}" data-img-scale="1">1x</button>
-            <button class="${state.imgScale === 2 ? "active" : ""}" data-img-scale="2">2x</button>
-            <button class="${state.imgScale === 3 ? "active" : ""}" data-img-scale="3">${escapeHtml(tr.imgScaleRec)}</button>
-            <button class="${state.imgScale === 4 ? "active" : ""}" data-img-scale="4">4x</button>
+            <button class="${state.imgScale === 2 ? "active" : ""}" data-img-scale="2">${escapeHtml(tr.imgScaleRec)}</button>
+            <button class="${state.imgScale === 3 ? "active" : ""}" data-img-scale="3">3x</button>
             <span class="c-muted">${escapeHtml(tr.imgOutWidth(state.imgWidth * state.imgScale))}</span>
           </div>
           ${
@@ -1249,7 +1248,7 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLElement>("[data-img-pool-limit]").forEach((el) => {
     el.addEventListener("click", () => {
       const val = el.dataset.imgPoolLimit;
-      state.imgPoolLimit = val === "all" ? "all" : Math.max(1, Number(val) || 5);
+      state.imgPoolLimit = val === "all" ? "all" : Math.max(1, Number(val) || 3);
       render();
     });
   });
