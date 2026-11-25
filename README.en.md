@@ -6,7 +6,7 @@ A minimalist, plain-text TUI-styled local gacha/pull analyzer for *Arknights: En
 
 Supports 5 languages: 繁體中文, 简体中文, 日本語, English, and 한국어.
 
-![EggRoll // Endfield Pull Tracker UI Preview](docs/screenshot.webp)
+![EggRoll // Endfield Pull Tracker UI Preview](docs/screenshot-en.webp)
 
 ## Features
 
