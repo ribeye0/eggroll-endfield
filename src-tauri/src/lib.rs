@@ -15,11 +15,11 @@ pub struct LogDetectionResult {
 }
 
 fn get_store_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("無法取得資料目錄: {e}"))?;
-    fs::create_dir_all(&dir).map_err(|e| format!("無法建立資料目錄: {e}"))?;
+    let base = dirs::config_dir()
+        .or_else(|| app.path().app_config_dir().ok())
+        .ok_or_else(|| "無法取得設定目錄".to_string())?;
+    let dir = base.join("eggroll");
+    fs::create_dir_all(&dir).map_err(|e| format!("無法建立設定目錄: {e}"))?;
     Ok(dir.join("store.json"))
 }
 
@@ -344,6 +344,14 @@ async fn http_post_json(
 #[tauri::command]
 fn load_store(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let path = get_store_path(&app)?;
+    if !path.exists() {
+        if let Ok(legacy_dir) = app.path().app_data_dir() {
+            let legacy_path = legacy_dir.join("store.json");
+            if legacy_path.exists() {
+                let _ = fs::copy(&legacy_path, &path);
+            }
+        }
+    }
     if !path.exists() {
         return Ok(serde_json::json!(null));
     }

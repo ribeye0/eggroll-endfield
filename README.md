@@ -21,6 +21,15 @@
 
 - Windows 使用者可直接前往 GitHub **Releases** 頁面下載最新版本的 `EggRoll` 執行檔（`.exe`）。
 
+## 設定檔路徑
+
+應用程式的設定與抽卡紀錄（`store.json`）儲存於以下路徑：
+
+| 作業系統 | 路徑 |
+| --- | --- |
+| Linux | `~/.config/eggroll/` |
+| Windows | `%APPDATA%\eggroll\` |
+
 ## 開發與建置
 
 ```bash
