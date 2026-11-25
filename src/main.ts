@@ -658,7 +658,7 @@ function renderStatsView(entries: PoolEntry[]): string {
   let historyContentHtml = "";
   if (displayedHistory.length === 0) {
     historyContentHtml = `
-      <table>
+      <table class="history-table">
         <thead>
           <tr>
             <th>#</th>
@@ -693,7 +693,7 @@ function renderStatsView(entries: PoolEntry[]): string {
             (g) => `
               <fieldset class="tui-panel pool-history-box">
                 <legend class="tui-legend">${escapeHtml(g.title)} (${g.items.length})</legend>
-                <table>
+                <table class="history-table">
                   <thead>
                     <tr>
                       <th>#</th>
@@ -716,7 +716,7 @@ function renderStatsView(entries: PoolEntry[]): string {
     `;
   } else {
     historyContentHtml = `
-      <table>
+      <table class="history-table">
         <thead>
           <tr>
             <th>#</th>

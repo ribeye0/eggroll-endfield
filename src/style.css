@@ -445,7 +445,7 @@ legend.tui-legend {
 
 .pity-row {
   display: grid;
-  grid-template-columns: 88px auto minmax(0, 1fr);
+  grid-template-columns: minmax(120px, auto) auto minmax(0, 1fr);
   align-items: center;
   gap: 10px;
 }
@@ -486,6 +486,43 @@ legend.tui-legend {
 table {
   width: 100%;
   border-collapse: collapse;
+}
+
+.history-table {
+  table-layout: fixed;
+}
+
+.history-table th:nth-child(1),
+.history-table td:nth-child(1) {
+  width: 44px;
+}
+
+.history-table th:nth-child(2),
+.history-table td:nth-child(2) {
+  width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-table th:nth-child(3),
+.history-table td:nth-child(3) {
+  width: 90px;
+}
+
+.history-table th:nth-child(4),
+.history-table td:nth-child(4) {
+  width: 155px;
+}
+
+.history-table th:nth-child(5),
+.history-table td:nth-child(5) {
+  width: 110px;
+}
+
+.history-table th:nth-child(6),
+.history-table td:nth-child(6) {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 th,

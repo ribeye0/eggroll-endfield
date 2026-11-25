@@ -275,7 +275,7 @@ export async function renderStatsToImageBytes(params: {
 
   // Pity bars
   const pityY = kpiY + kpiH + Math.round(22 * fontScale);
-  const barX = padX + Math.round(114 * fontScale);
+  const barX = padX + Math.round(132 * fontScale);
   const barWidth = logicalWidth >= 1200 ? 28 : logicalWidth <= 700 ? 16 : 22;
   const smallRem = Math.max(0, stat.smallPityMax - stat.pityCount);
   const smallBar = renderAsciiBar(stat.pityCount, stat.smallPityMax, barWidth);
