@@ -358,11 +358,20 @@ legend.tui-legend {
 }
 
 .pool-item-name {
+  flex: 1;
+  min-width: 0;
   font-weight: 700;
   color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pool-item-pulls {
+  flex-shrink: 0;
+  white-space: nowrap;
+  min-width: 4ch;
+  text-align: right;
 }
 
 .pool-item.active .pool-item-name {

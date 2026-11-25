@@ -471,7 +471,7 @@ function renderStatsView(entries: PoolEntry[]): string {
               <button class="pool-item ${it.id === selected.id ? "active" : ""}" data-pool-id="${escapeHtml(it.id)}">
                 <div class="pool-item-top">
                   <span class="pool-item-name">${badge}${escapeHtml(it.label)}</span>
-                  <span class="c-muted">${st.totalPulls}${escapeHtml(tr.pullsUnit)}</span>
+                  <span class="pool-item-pulls c-muted">${st.totalPulls}${escapeHtml(tr.pullsUnit)}</span>
                 </div>
                 <div class="pool-item-sub">
                   <span class="c-gold">6★: ${st.count6}</span>
