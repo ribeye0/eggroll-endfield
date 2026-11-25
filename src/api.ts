@@ -807,3 +807,55 @@ export async function syncAccountGacha(
 
   return { records: nextRecords, poolInfo: nextPoolInfo, addedChar, addedWeapon };
 }
+
+export interface UpdateCheckResult {
+  currentVersion: string;
+  latestVersion: string;
+  hasUpdate: boolean;
+  releaseNotes: string;
+  releaseUrl: string;
+  assetName: string | null;
+  downloadUrl: string | null;
+  assetSize: number | null;
+}
+
+export interface UpdateDownloadProgress {
+  downloaded: number;
+  total: number | null;
+  percent: number | null;
+}
+
+export async function checkAppUpdate(): Promise<UpdateCheckResult> {
+  if (!isTauriEnv()) {
+    throw new Error("僅桌面版支援檢查更新");
+  }
+  return invoke<UpdateCheckResult>("check_app_update");
+}
+
+export async function downloadAppUpdate(
+  url: string,
+  assetName: string,
+  onProgress?: (p: UpdateDownloadProgress) => void,
+): Promise<string> {
+  if (!isTauriEnv()) {
+    throw new Error("僅桌面版支援下載更新");
+  }
+  let unlisten: UnlistenFn | null = null;
+  if (onProgress) {
+    unlisten = await listen<UpdateDownloadProgress>("update-download-progress", (e) => {
+      if (e.payload) onProgress(e.payload);
+    });
+  }
+  try {
+    return await invoke<string>("download_app_update", { url, assetName });
+  } finally {
+    if (unlisten) unlisten();
+  }
+}
+
+export async function installAppUpdate(downloadedPath: string): Promise<void> {
+  if (!isTauriEnv()) {
+    throw new Error("僅桌面版支援安裝更新");
+  }
+  await invoke("install_app_update", { downloadedPath });
+}

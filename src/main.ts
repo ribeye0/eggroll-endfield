@@ -7,6 +7,7 @@ import "@fontsource/noto-sans-jp/700.css";
 import "@fontsource/noto-sans-kr/400.css";
 import "@fontsource/noto-sans-kr/700.css";
 import "./style.css";
+import pkg from "../package.json";
 import type {
   AccountInfo,
   AccountRecords,
@@ -34,10 +35,13 @@ import {
   WEAPON_RERUN_POOL_TYPE,
 } from "./gachaCalc";
 import {
+  checkAppUpdate,
   detectGachaLog,
+  downloadAppUpdate,
   exchangeLoginTokenToAccounts,
   exportBinaryToFile,
   exportJsonToFile,
+  installAppUpdate,
   loadAppStore,
   openOfficialLoginWindow,
   parseGachaUrlOrToken,
@@ -45,6 +49,7 @@ import {
   refreshU8TokenFromLoginToken,
   saveAppStore,
   syncAccountGacha,
+  type UpdateCheckResult,
 } from "./api";
 import {
   renderStatsToImageBytes,
@@ -113,6 +118,13 @@ const state = {
   imgHistoryLimit: 10 as number | "all",
   imgGroupByPool: true,
   imgPoolLimit: 3 as number | "all",
+  updatePhase: "idle" as "idle" | "checking" | "uptodate" | "available" | "downloading" | "ready" | "error",
+  updateInfo: null as UpdateCheckResult | null,
+  updateDownloadPercent: null as number | null,
+  updateDownloadedBytes: 0,
+  updateTotalBytes: null as number | null,
+  updateDownloadedPath: "",
+  updateError: "",
 };
 
 const MIN_ZOOM = 0.8;
@@ -892,6 +904,8 @@ function renderImportView(): string {
           ${accountsHtml}
         </div>
       </fieldset>
+
+      ${renderUpdatePanel()}
     </div>
   `;
 }
@@ -993,6 +1007,113 @@ function renderImageModal(): string {
         </div>
       </fieldset>
     </div>
+  `;
+}
+
+function getUpdateButtonLabel(tr: ReturnType<typeof getTr>): string {
+  if (state.updatePhase === "checking") return tr.updateBtnChecking;
+  if (state.updatePhase === "downloading") return tr.updateBtnDownloading(state.updateDownloadPercent);
+  if (state.updatePhase === "ready") return tr.updateBtnReady;
+  if (state.updatePhase === "available" && state.updateInfo) {
+    return tr.updateBtnAvailable(state.updateInfo.latestVersion);
+  }
+  return tr.updateBtnIdle;
+}
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (!bytes || bytes <= 0) return "";
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderUpdateProgressHtml(): string {
+  const pct = state.updateDownloadPercent ?? 0;
+  const bar = renderAsciiBar(pct, 100, 24);
+  const doneStr = formatBytes(state.updateDownloadedBytes);
+  const totalStr = formatBytes(state.updateTotalBytes);
+  const sizePart = totalStr ? `${doneStr} / ${totalStr}` : doneStr;
+  return `<div class="c-cyan">${escapeHtml(bar)} ${pct}% ${sizePart ? `(${escapeHtml(sizePart)})` : ""}</div>`;
+}
+
+function renderUpdatePanel(): string {
+  const tr = getTr();
+  const info = state.updateInfo;
+  const currentVer = info?.currentVersion || pkg.version;
+
+  let versionLine = `<span class="c-muted">${escapeHtml(tr.updateCurrentVer)}</span> <strong>v${escapeHtml(currentVer)}</strong>`;
+  if (info && state.updatePhase !== "checking") {
+    const latestColor = info.hasUpdate ? "c-gold" : "c-green";
+    versionLine += ` <span class="c-muted">→ ${escapeHtml(tr.updateLatestVer)}</span> <strong class="${latestColor}">v${escapeHtml(info.latestVersion)}</strong>`;
+  }
+
+  let checkBtnHtml = "";
+  if (state.updatePhase === "checking") {
+    checkBtnHtml = `<button id="btn-check-update" disabled>${escapeHtml(tr.updateBtnChecking)}</button>`;
+  } else if (state.updatePhase === "downloading") {
+    checkBtnHtml = `<button disabled>${escapeHtml(tr.updateBtnDownloading(state.updateDownloadPercent))}</button>`;
+  } else if (state.updatePhase === "idle") {
+    checkBtnHtml = `<button id="btn-check-update">${escapeHtml(tr.updateBtnIdle)}</button>`;
+  } else {
+    checkBtnHtml = `<button id="btn-update-recheck">${escapeHtml(tr.updateRecheckBtn)}</button>`;
+  }
+
+  let detailHtml = "";
+  let primaryActionHtml = "";
+
+  if (state.updatePhase === "checking") {
+    detailHtml = `<div class="c-cyan">${escapeHtml(tr.updateCheckingMsg)}</div>`;
+  } else if (state.updatePhase === "error") {
+    detailHtml = `
+      <div class="c-red">${escapeHtml(state.updateError)}</div>
+      ${
+        info?.releaseUrl
+          ? `<div class="row"><a class="c-cyan" href="${escapeHtml(info.releaseUrl)}" target="_blank" rel="noreferrer">${escapeHtml(tr.updateOpenReleaseBtn)}</a></div>`
+          : ""
+      }
+    `;
+  } else if (state.updatePhase === "uptodate" && info) {
+    detailHtml = `<div class="c-green">${escapeHtml(tr.updateUpToDate)}</div>`;
+  } else if (info && info.hasUpdate) {
+    const notesText = info.releaseNotes.trim() || tr.updateNoNotes;
+    const sizeText = info.assetSize ? ` (${formatBytes(info.assetSize)})` : "";
+    detailHtml = `
+      <div class="c-green">${escapeHtml(tr.updateAvailableMsg(info.latestVersion))}</div>
+      ${
+        info.assetName
+          ? `<div class="row"><span class="c-muted">${escapeHtml(tr.updateAssetLabel)}</span> <span>${escapeHtml(info.assetName)}${escapeHtml(sizeText)}</span></div>`
+          : `<div class="c-yellow">${escapeHtml(tr.updateNoAsset)}</div>`
+      }
+      <div class="c-muted">${escapeHtml(tr.updateNotesLabel)}</div>
+      <pre class="modal-notes" style="max-height:140px;overflow:auto;padding:8px;border:1px solid var(--border);background:var(--bg);white-space:pre-wrap;margin:0;font-size:12px;">${escapeHtml(notesText)}</pre>
+    `;
+
+    if (state.updatePhase === "downloading") {
+      detailHtml += `
+        <div id="update-progress-wrap">${renderUpdateProgressHtml()}</div>
+        <div class="c-muted" style="font-size:12px;">${escapeHtml(tr.updateDownloadingHint)}</div>
+      `;
+    } else if (state.updatePhase === "ready") {
+      detailHtml += `<div class="c-green">${escapeHtml(tr.updateReadyMsg)}</div>`;
+      primaryActionHtml = `<button id="btn-update-install" class="btn-sync btn-block">${escapeHtml(tr.updateInstallBtn)}</button>`;
+    } else if (info.downloadUrl && info.assetName) {
+      primaryActionHtml = `<button id="btn-update-download" class="btn-sync btn-block">${escapeHtml(tr.updateDownloadBtn)}</button>`;
+    } else {
+      detailHtml += `<div class="row"><a class="c-cyan" href="${escapeHtml(info.releaseUrl)}" target="_blank" rel="noreferrer">${escapeHtml(tr.updateOpenReleaseBtn)}</a></div>`;
+    }
+  }
+
+  return `
+    <fieldset class="tui-panel">
+      <legend class="tui-legend">${escapeHtml(tr.updateModalTitle)}</legend>
+      <div class="form-stack">
+        <div class="row" style="justify-content:space-between;align-items:center;">
+          <div>${versionLine}</div>
+          ${checkBtnHtml}
+        </div>
+        ${detailHtml}
+        ${primaryActionHtml}
+      </div>
+    </fieldset>
   `;
 }
 
@@ -1301,6 +1422,22 @@ function bindEvents(): void {
     }
   });
 
+  document.getElementById("btn-check-update")?.addEventListener("click", () => {
+    void runCheckUpdate();
+  });
+
+  document.getElementById("btn-update-recheck")?.addEventListener("click", () => {
+    void runCheckUpdate();
+  });
+
+  document.getElementById("btn-update-download")?.addEventListener("click", () => {
+    void runDownloadUpdate();
+  });
+
+  document.getElementById("btn-update-install")?.addEventListener("click", () => {
+    void runInstallUpdate();
+  });
+
   document.querySelectorAll<HTMLElement>("[data-tab]").forEach((el) => {
     el.addEventListener("click", () => {
       state.tab = el.dataset.tab as MainTab;
@@ -1559,6 +1696,69 @@ window.addEventListener("keydown", (e) => {
     }
   }
 });
+
+async function runCheckUpdate() {
+  if (state.updatePhase === "checking" || state.updatePhase === "downloading") return;
+  state.updatePhase = "checking";
+  state.updateError = "";
+  render();
+  try {
+    const info = await checkAppUpdate();
+    state.updateInfo = info;
+    if (info.hasUpdate) {
+      state.updatePhase = state.updateDownloadedPath ? "ready" : "available";
+    } else {
+      state.updatePhase = "uptodate";
+    }
+  } catch (err: any) {
+    state.updatePhase = "error";
+    state.updateError = err?.message || String(err);
+  }
+  render();
+}
+
+async function runDownloadUpdate() {
+  const info = state.updateInfo;
+  if (!info?.downloadUrl || !info?.assetName) return;
+  if (state.updatePhase === "downloading") return;
+
+  state.updatePhase = "downloading";
+  state.updateDownloadPercent = 0;
+  state.updateDownloadedBytes = 0;
+  state.updateTotalBytes = info.assetSize ?? null;
+  state.updateError = "";
+  render();
+
+  try {
+    const savedPath = await downloadAppUpdate(info.downloadUrl, info.assetName, (p) => {
+      state.updateDownloadedBytes = p.downloaded;
+      state.updateTotalBytes = p.total ?? state.updateTotalBytes;
+      state.updateDownloadPercent = p.percent;
+      const btn = document.getElementById("btn-check-update");
+      if (btn) btn.textContent = getUpdateButtonLabel(getTr());
+      const wrap = document.getElementById("update-progress-wrap");
+      if (wrap) wrap.innerHTML = renderUpdateProgressHtml();
+    });
+    state.updateDownloadedPath = savedPath;
+    state.updatePhase = "ready";
+    setStatus(getTr().updateDownloadDoneStatus(info.latestVersion));
+  } catch (err: any) {
+    state.updatePhase = "error";
+    state.updateError = err?.message || String(err);
+  }
+  render();
+}
+
+async function runInstallUpdate() {
+  if (!state.updateDownloadedPath) return;
+  try {
+    await installAppUpdate(state.updateDownloadedPath);
+  } catch (err: any) {
+    state.updatePhase = "error";
+    state.updateError = err?.message || String(err);
+    render();
+  }
+}
 
 async function bootstrap() {
   state.store = await loadAppStore();

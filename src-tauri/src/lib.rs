@@ -1,11 +1,18 @@
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const GITHUB_RELEASES_LATEST_URL: &str =
+    "https://api.github.com/repos/ribeye0/eggroll-endfield/releases/latest";
+const GITHUB_RELEASES_PAGE_URL: &str =
+    "https://github.com/ribeye0/eggroll-endfield/releases";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogDetectionResult {
@@ -341,6 +348,325 @@ async fn http_post_json(
         .map_err(|e| format!("JSON 解析失敗: {e}"))
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckResult {
+    pub current_version: String,
+    pub latest_version: String,
+    pub has_update: bool,
+    pub release_notes: String,
+    pub release_url: String,
+    pub asset_name: Option<String>,
+    pub download_url: Option<String>,
+    pub asset_size: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct UpdateDownloadProgress {
+    downloaded: u64,
+    total: Option<u64>,
+    percent: Option<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+    size: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    body: Option<String>,
+    html_url: Option<String>,
+    assets: Option<Vec<GithubAsset>>,
+}
+
+fn parse_semver_parts(ver: &str) -> (u64, u64, u64) {
+    let clean = ver.trim().trim_start_matches(|c| c == 'v' || c == 'V');
+    let mut parts = clean.split('.').map(|s| {
+        s.split('-')
+            .next()
+            .unwrap_or("0")
+            .parse::<u64>()
+            .unwrap_or(0)
+    });
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
+fn compare_semver(a: &str, b: &str) -> Ordering {
+    parse_semver_parts(a).cmp(&parse_semver_parts(b))
+}
+
+fn select_release_asset_for_os<'a>(
+    assets: &'a [GithubAsset],
+    target_os: &str,
+) -> Option<&'a GithubAsset> {
+    match target_os {
+        "windows" => assets
+            .iter()
+            .find(|a| {
+                let n = a.name.to_ascii_lowercase();
+                n.ends_with(".exe") && !n.contains("setup")
+            })
+            .or_else(|| {
+                assets
+                    .iter()
+                    .find(|a| a.name.to_ascii_lowercase().ends_with(".exe"))
+            }),
+        "linux" => assets
+            .iter()
+            .find(|a| a.name.to_ascii_lowercase().ends_with(".appimage")),
+        "macos" => assets
+            .iter()
+            .find(|a| a.name.to_ascii_lowercase().ends_with(".dmg")),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+async fn check_app_update() -> Result<UpdateCheckResult, String> {
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("建立 HTTP 連線失敗: {e}"))?;
+
+    let resp = client
+        .get(GITHUB_RELEASES_LATEST_URL)
+        .header("User-Agent", "EggRoll-Updater")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("檢查更新連線失敗: {e}"))?;
+
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(UpdateCheckResult {
+            current_version: current_version.clone(),
+            latest_version: current_version,
+            has_update: false,
+            release_notes: String::new(),
+            release_url: GITHUB_RELEASES_PAGE_URL.to_string(),
+            asset_name: None,
+            download_url: None,
+            asset_size: None,
+        });
+    }
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub Releases API 回應錯誤: HTTP {}", resp.status()));
+    }
+
+    let release = resp
+        .json::<GithubRelease>()
+        .await
+        .map_err(|e| format!("解析更新資訊失敗: {e}"))?;
+
+    let latest_version = release
+        .tag_name
+        .trim()
+        .trim_start_matches(|c| c == 'v' || c == 'V')
+        .to_string();
+    let has_update = compare_semver(&latest_version, &current_version) == Ordering::Greater;
+    let assets = release.assets.unwrap_or_default();
+    let picked = select_release_asset_for_os(&assets, std::env::consts::OS);
+
+    Ok(UpdateCheckResult {
+        current_version,
+        latest_version,
+        has_update,
+        release_notes: release.body.unwrap_or_default(),
+        release_url: release
+            .html_url
+            .unwrap_or_else(|| GITHUB_RELEASES_PAGE_URL.to_string()),
+        asset_name: picked.map(|a| a.name.clone()),
+        download_url: picked.map(|a| a.browser_download_url.clone()),
+        asset_size: picked.map(|a| a.size),
+    })
+}
+
+#[tauri::command]
+async fn download_app_update(
+    app: tauri::AppHandle,
+    url: String,
+    asset_name: String,
+) -> Result<String, String> {
+    let base = dirs::config_dir()
+        .or_else(|| app.path().app_config_dir().ok())
+        .ok_or_else(|| "無法取得設定目錄".to_string())?;
+    let updates_dir = base.join("eggroll").join("updates");
+    fs::create_dir_all(&updates_dir).map_err(|e| format!("無法建立更新暫存目錄: {e}"))?;
+
+    let safe_name = sanitize_filename(&asset_name);
+    let final_path = updates_dir.join(&safe_name);
+    let part_path = updates_dir.join(format!("{safe_name}.part"));
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("建立下載連線失敗: {e}"))?;
+
+    let mut resp = client
+        .get(&url)
+        .header("User-Agent", "EggRoll-Updater")
+        .send()
+        .await
+        .map_err(|e| format!("下載更新失敗: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("下載更新失敗: HTTP {}", resp.status()));
+    }
+
+    let total = resp.content_length();
+    let mut file = fs::File::create(&part_path).map_err(|e| format!("建立暫存檔失敗: {e}"))?;
+    let mut downloaded: u64 = 0;
+    let mut last_emit: u64 = 0;
+
+    let _ = app.emit(
+        "update-download-progress",
+        UpdateDownloadProgress {
+            downloaded: 0,
+            total,
+            percent: total.map(|_| 0),
+        },
+    );
+
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("讀取更新檔案失敗: {e}"))?
+    {
+        file.write_all(&chunk)
+            .map_err(|e| format!("寫入更新檔案失敗: {e}"))?;
+        downloaded += chunk.len() as u64;
+        if downloaded - last_emit >= 131_072 {
+            last_emit = downloaded;
+            let percent = total.and_then(|t| {
+                if t > 0 {
+                    Some(((downloaded * 100) / t).min(100) as u8)
+                } else {
+                    None
+                }
+            });
+            let _ = app.emit(
+                "update-download-progress",
+                UpdateDownloadProgress {
+                    downloaded,
+                    total,
+                    percent,
+                },
+            );
+        }
+    }
+
+    file.flush().map_err(|e| format!("刷新更新檔案失敗: {e}"))?;
+    drop(file);
+
+    if final_path.exists() {
+        let _ = fs::remove_file(&final_path);
+    }
+    fs::rename(&part_path, &final_path).map_err(|e| format!("儲存更新檔案失敗: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&final_path)
+            .map_err(|e| format!("讀取檔案權限失敗: {e}"))?
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&final_path, perms)
+            .map_err(|e| format!("設定執行權限失敗: {e}"))?;
+    }
+
+    let _ = app.emit(
+        "update-download-progress",
+        UpdateDownloadProgress {
+            downloaded,
+            total: total.or(Some(downloaded)),
+            percent: Some(100),
+        },
+    );
+
+    Ok(final_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn install_app_update(app: tauri::AppHandle, downloaded_path: String) -> Result<(), String> {
+    let src = Path::new(&downloaded_path);
+    if !src.exists() {
+        return Err("找不到已下載的更新檔案，請重新下載".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let name = src
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        if name.contains("setup") {
+            Command::new("cmd")
+                .args(["/C", "start", "", &downloaded_path])
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .map_err(|e| format!("啟動安裝程式失敗: {e}"))?;
+        } else {
+            let current_exe =
+                std::env::current_exe().map_err(|e| format!("無法取得目前執行檔路徑: {e}"))?;
+            let dst = current_exe.to_string_lossy().to_string();
+            let script = format!(
+                "ping 127.0.0.1 -n 2 > nul & move /Y \"{}\" \"{}\" & start \"\" \"{}\"",
+                downloaded_path.replace('"', ""),
+                dst.replace('"', ""),
+                dst.replace('"', "")
+            );
+            Command::new("cmd")
+                .args(["/C", &script])
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .map_err(|e| format!("啟動更新程序失敗: {e}"))?;
+        }
+
+        app.exit(0);
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let target = std::env::var_os("APPIMAGE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_exe().unwrap_or_else(|_| src.to_path_buf()));
+        let target_str = target.to_string_lossy().to_string();
+
+        Command::new("sh")
+            .args([
+                "-c",
+                "sleep 1; if cp -f \"$1\" \"$2.new\" 2>/dev/null && chmod +x \"$2.new\" && mv -f \"$2.new\" \"$2\"; then rm -f \"$1\"; nohup \"$2\" >/dev/null 2>&1 & else chmod +x \"$1\" && nohup \"$1\" >/dev/null 2>&1 & fi",
+                "_",
+                &downloaded_path,
+                &target_str,
+            ])
+            .spawn()
+            .map_err(|e| format!("啟動更新程序失敗: {e}"))?;
+
+        app.exit(0);
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("目前作業系統不支援自動套用更新，請手動開啟下載檔案".to_string())
+}
+
 #[tauri::command]
 fn load_store(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let path = get_store_path(&app)?;
@@ -574,7 +900,10 @@ pub fn run() {
             load_store,
             save_store,
             export_json_file,
-            export_binary_file
+            export_binary_file,
+            check_app_update,
+            download_app_update,
+            install_app_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -602,6 +931,38 @@ mod tests {
         assert_eq!(
             url,
             "https://ef-webview.gryphline.com/page/gacha_char?u8_token=AbCdEf0123456789%2BGhIjKlMnOpQrStUvWxYz%2F%3D%3D"
+        );
+    }
+
+    #[test]
+    fn compares_semver_versions_correctly() {
+        assert_eq!(compare_semver("0.2.0", "0.1.0"), Ordering::Greater);
+        assert_eq!(compare_semver("v1.0.0", "0.9.9"), Ordering::Greater);
+        assert_eq!(compare_semver("0.1.0", "0.1.0"), Ordering::Equal);
+        assert_eq!(compare_semver("0.1.0", "0.1.1"), Ordering::Less);
+    }
+
+    #[test]
+    fn selects_expected_release_asset_per_os() {
+        let assets = vec![
+            GithubAsset {
+                name: "EggRoll_0.2.0_amd64.AppImage".to_string(),
+                browser_download_url: "https://example.com/appimage".to_string(),
+                size: 100,
+            },
+            GithubAsset {
+                name: "EggRoll-0.2.0-windows-x64.exe".to_string(),
+                browser_download_url: "https://example.com/win.exe".to_string(),
+                size: 200,
+            },
+        ];
+        assert_eq!(
+            select_release_asset_for_os(&assets, "linux").map(|a| a.name.as_str()),
+            Some("EggRoll_0.2.0_amd64.AppImage")
+        );
+        assert_eq!(
+            select_release_asset_for_os(&assets, "windows").map(|a| a.name.as_str()),
+            Some("EggRoll-0.2.0-windows-x64.exe")
         );
     }
 }
