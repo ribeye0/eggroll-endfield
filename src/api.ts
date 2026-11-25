@@ -148,6 +148,7 @@ export async function loadAppStore(): Promise<AppStore> {
     records: {},
     poolInfo: { ...DEFAULT_POOL_INFO },
     theme: "dark",
+    locale: "zh-TW",
     zoom: 1,
     historyLimit: 20,
   };
@@ -161,6 +162,7 @@ export async function loadAppStore(): Promise<AppStore> {
           records: data.records || {},
           poolInfo: { ...DEFAULT_POOL_INFO, ...(data.poolInfo || {}) },
           theme: data.theme === "light" ? "light" : "dark",
+          locale: data.locale || "zh-TW",
           zoom: typeof data.zoom === "number" ? data.zoom : 1,
           historyLimit:
             data.historyLimit === "all" || (typeof data.historyLimit === "number" && data.historyLimit > 0)
@@ -178,6 +180,7 @@ export async function loadAppStore(): Promise<AppStore> {
       ...parsed,
       poolInfo: { ...DEFAULT_POOL_INFO, ...(parsed?.poolInfo || {}) },
       theme: parsed?.theme === "light" ? "light" : "dark",
+      locale: parsed?.locale || "zh-TW",
       zoom: typeof parsed?.zoom === "number" ? parsed.zoom : 1,
       historyLimit:
         parsed?.historyLimit === "all" || (typeof parsed?.historyLimit === "number" && parsed.historyLimit > 0)
@@ -473,11 +476,39 @@ async function fetchPoolContent(
   }
 }
 
+async function fetchRerunCounts(
+  type: "char" | "weapon",
+  provider: Provider,
+  token: string,
+  serverId: string,
+  lang: string,
+): Promise<RerunCountMap> {
+  try {
+    const query = new URLSearchParams({ lang, token, server_id: serverId });
+    const json = await httpGetJson<any>(
+      `https://ef-webview.${provider}.com/api/record/${type}/rerun-counts?${query.toString()}`,
+    );
+    if (json?.code !== 0 || !Array.isArray(json.data)) return {};
+    const map: RerunCountMap = {};
+    for (const item of json.data) {
+      const pid = String(item?.poolId || "").trim();
+      const cnt = Number(item?.totalPullCount);
+      if (pid && Number.isFinite(cnt) && cnt >= 0) {
+        map[pid] = Math.max(map[pid] || 0, Math.floor(cnt));
+      }
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
 export async function syncAccountGacha(
   account: AccountInfo,
   currentRecords: AccountRecords,
   poolInfo: Record<string, PoolInfoEntry>,
   onProgress: (msg: string) => void,
+  preferredLang?: string,
 ): Promise<{
   records: AccountRecords;
   poolInfo: Record<string, PoolInfoEntry>;
@@ -489,7 +520,7 @@ export async function syncAccountGacha(
 
   const provider = account.provider;
   const serverId = account.serverId || "1";
-  const lang = provider === "gryphline" ? "zh-tw" : "zh-cn";
+  const lang = preferredLang || (provider === "gryphline" ? "zh-tw" : "zh-cn");
   const nextPoolInfo = { ...poolInfo };
   const nextRecords: AccountRecords = {
     char: { ...currentRecords.char },
@@ -534,8 +565,18 @@ export async function syncAccountGacha(
     }
   }
 
+  // 1.5 Fetch char rerun counts
+  const charRerun = await fetchRerunCounts("char", provider, token, serverId, lang);
+  if (Object.keys(charRerun).length > 0) {
+    nextRecords.charRerunCounts = { ...nextRecords.charRerunCounts, ...charRerun };
+  }
+
   // 2. Weapon pools
   onProgress("取得武器池列表...");
+  const weaponRerun = await fetchRerunCounts("weapon", provider, token, serverId, lang);
+  if (Object.keys(weaponRerun).length > 0) {
+    nextRecords.weaponRerunCounts = { ...nextRecords.weaponRerunCounts, ...weaponRerun };
+  }
   const weaponPoolQuery = new URLSearchParams({ lang, token, server_id: serverId });
   const weaponPoolRes = await httpGetJson<any>(
     `https://ef-webview.${provider}.com/api/record/weapon/pool?${weaponPoolQuery.toString()}`,

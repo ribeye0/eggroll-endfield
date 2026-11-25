@@ -19,6 +19,7 @@ import {
   analyzeSpecialPoolData,
   analyzeWeaponPoolData,
   BEGINNER_POOL_KEY,
+  computeWeaponGiftMilestone,
   isLimited6Star,
   JOINT_POOL_KEY,
   mergeAllPoolStats,
@@ -27,6 +28,8 @@ import {
   RERUN_POOL_KEY,
   SPECIAL_POOL_KEY,
   STANDARD_POOL_KEY,
+  WEAPON_LIMITED_POOL_TYPE,
+  WEAPON_RERUN_POOL_TYPE,
 } from "./gachaCalc";
 import {
   detectGachaLog,
@@ -52,6 +55,13 @@ import {
   importFromAkegf,
   isAkegfDocument,
 } from "./akegf";
+import {
+  getApiLang,
+  getHtmlLang,
+  LOCALE_LABELS,
+  TRANSLATIONS,
+  type Locale,
+} from "./i18n";
 import { DEMO_ACCOUNT, DEMO_POOL_INFO, DEMO_RECORDS } from "./demoData";
 
 type MainTab = "char" | "weapon" | "import";
@@ -103,8 +113,14 @@ function clampZoom(z: number): number {
   return Math.round(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z)) * 10) / 10;
 }
 
+function getTr() {
+  return TRANSLATIONS[state.store.locale || "zh-TW"];
+}
+
 function applyThemeAndZoom(): void {
+  const locale = state.store.locale || "zh-TW";
   document.documentElement.setAttribute("data-theme", state.store.theme);
+  document.documentElement.setAttribute("lang", getHtmlLang(locale));
   const z = clampZoom(state.store.zoom ?? 1);
   state.store.zoom = z;
   document.documentElement.style.setProperty("--ui-zoom", String(z));
@@ -171,48 +187,91 @@ function buildCharPoolEntries(records: AccountRecords): PoolEntry[] {
 
   const specialRaw = records.char[SPECIAL_POOL_KEY] || [];
   const specialStats = analyzeSpecialPoolData(specialRaw, poolInfo);
+
+  const rerunRaw = records.char[RERUN_POOL_KEY] || [];
+  const rerunStats = analyzeRerunPoolData(rerunRaw, poolInfo, records.charRerunCounts);
+
+  const jointRaw = records.char[JOINT_POOL_KEY] || [];
+  const jointStats = analyzeJointPoolData(jointRaw, poolInfo);
+
+  const tr = getTr();
+  const combinedLimited = [...specialStats, ...rerunStats, ...jointStats];
+  if (combinedLimited.length > 0) {
+    const mergedLimited = mergeAllPoolStats(
+      tr.allLimitedTitle,
+      "limited_all",
+      combinedLimited,
+    );
+    const subPities: Array<{ label: string; pity: number; max: number }> = [];
+    if (specialStats.length > 0) {
+      subPities.push({
+        label: tr.subSpecial,
+        pity: specialStats[0]!.pityCount,
+        max: specialStats[0]!.smallPityMax,
+      });
+    }
+    if (rerunStats.length > 0) {
+      subPities.push({
+        label: tr.subRerun,
+        pity: rerunStats[0]!.pityCount,
+        max: rerunStats[0]!.smallPityMax,
+      });
+    }
+    if (jointStats.length > 0) {
+      subPities.push({
+        label: tr.subJoint,
+        pity: jointStats[0]!.pityCount,
+        max: jointStats[0]!.smallPityMax,
+      });
+    }
+    mergedLimited.subPities = subPities;
+    mergedLimited.bigPityMax = undefined;
+    entries.push({
+      id: "char:limited:all",
+      group: tr.groupLimitedAll,
+      label: tr.allLimitedLabel,
+      stat: mergedLimited,
+    });
+  }
+
   if (specialStats.length > 0) {
     entries.push({
       id: "char:special:all",
-      group: "特許尋訪 (限定)",
-      label: "全部特許尋訪",
-      stat: mergeAllPoolStats("特許尋訪 // 總覽", SPECIAL_POOL_KEY, specialStats),
+      group: tr.groupSpecial,
+      label: tr.allSpecialLabel,
+      stat: mergeAllPoolStats(tr.allSpecialTitle, SPECIAL_POOL_KEY, specialStats),
     });
     for (const s of specialStats) {
       entries.push({
         id: `char:special:${s.poolId || s.poolName}`,
-        group: "特許尋訪 (限定)",
+        group: tr.groupSpecial,
         label: s.poolName,
         stat: s,
       });
     }
   }
 
-  const rerunRaw = records.char[RERUN_POOL_KEY] || [];
-  const rerunStats = analyzeRerunPoolData(rerunRaw, poolInfo, records.charRerunCounts);
   if (rerunStats.length > 0) {
     entries.push({
       id: "char:rerun:all",
-      group: "重構尋訪",
-      label: "全部重構尋訪",
-      stat: mergeAllPoolStats("重構尋訪 // 總覽", RERUN_POOL_KEY, rerunStats),
+      group: tr.groupRerun,
+      label: tr.allRerunLabel,
+      stat: mergeAllPoolStats(tr.allRerunTitle, RERUN_POOL_KEY, rerunStats),
     });
     for (const s of rerunStats) {
       entries.push({
         id: `char:rerun:${s.poolName}`,
-        group: "重構尋訪",
+        group: tr.groupRerun,
         label: s.poolName,
         stat: s,
       });
     }
   }
 
-  const jointRaw = records.char[JOINT_POOL_KEY] || [];
-  const jointStats = analyzeJointPoolData(jointRaw, poolInfo);
   for (const s of jointStats) {
     entries.push({
       id: `char:joint:${s.poolId || s.poolName}`,
-      group: "輝光慶典",
+      group: tr.groupJoint,
       label: s.poolName,
       stat: s,
     });
@@ -223,7 +282,7 @@ function buildCharPoolEntries(records: AccountRecords): PoolEntry[] {
     if (raw.length > 0 || entries.length === 0) {
       entries.push({
         id: `char:simple:${key}`,
-        group: "常駐 / 新手",
+        group: tr.groupStandard,
         label: POOL_NAME_MAP[key] || key,
         stat: analyzeSimpleCharPool(key, raw),
       });
@@ -273,11 +332,13 @@ function pityColorClass(pity: number, max: number): string {
 }
 
 function renderTopBar(): string {
+  const tr = getTr();
+  const locale = state.store.locale || "zh-TW";
   const accounts = state.store.accounts;
   const active = getActiveAccount();
   const accountOptions =
     accounts.length === 0
-      ? `<option value="">-- 尚無帳號 --</option>`
+      ? `<option value="">${escapeHtml(tr.noAccount)}</option>`
       : accounts
           .map(
             (a) =>
@@ -285,36 +346,45 @@ function renderTopBar(): string {
           )
           .join("");
 
+  const localeOptions = (Object.keys(LOCALE_LABELS) as Locale[])
+    .map(
+      (loc) =>
+        `<option value="${loc}" ${loc === locale ? "selected" : ""}>${LOCALE_LABELS[loc]}</option>`,
+    )
+    .join("");
+
   return `
     <header class="topbar">
       <div class="brand">
         <span>Simple Endfield Pull Tracker</span>
       </div>
       <div class="topbar-controls">
-        <span class="c-muted">帳號:</span>
+        <span class="c-muted">${escapeHtml(tr.accountLabel)}</span>
         <select id="account-select">${accountOptions}</select>
-        <button id="btn-sync" ${state.busy || !active?.u8Token ? "disabled" : ""} title="使用目前帳號的 Token 同步最新抽卡紀錄">[↻ 同步]</button>
-        <button id="btn-export-img" class="btn-export-img" ${!active || state.tab === "import" ? "disabled" : ""} title="將目前卡池統計匯出為圖片 (PNG/JPG/WebP)">[匯出圖片]</button>
-        <button id="btn-export" ${!active ? "disabled" : ""} title="匯出目前帳號的紀錄為 AKEGF JSON">[匯出 JSON]</button>
-        <button id="btn-zoom-out" title="縮小介面 (-)">[-]</button>
-        <button id="btn-zoom-reset" title="重設縮放 (0)">${Math.round((state.store.zoom ?? 1) * 100)}%</button>
-        <button id="btn-zoom-in" title="放大介面 (+)">[+]</button>
-        <button id="btn-theme">[主題: ${state.store.theme === "dark" ? "DARK" : "LIGHT"}]</button>
+        <button id="btn-sync" ${state.busy || !active?.u8Token ? "disabled" : ""}>${escapeHtml(tr.syncBtn)}</button>
+        <button id="btn-export-img" class="btn-export-img" ${!active || state.tab === "import" ? "disabled" : ""}>${escapeHtml(tr.exportImgBtn)}</button>
+        <button id="btn-export" ${!active ? "disabled" : ""}>${escapeHtml(tr.exportJsonBtn)}</button>
+        <select id="locale-select" title="Language / 語言">${localeOptions}</select>
+        <button id="btn-zoom-out" title="Zoom out (-)">[-]</button>
+        <button id="btn-zoom-reset" title="Reset zoom (0)">${Math.round((state.store.zoom ?? 1) * 100)}%</button>
+        <button id="btn-zoom-in" title="Zoom in (+)">[+]</button>
+        <button id="btn-theme">${escapeHtml(tr.themeBtn(state.store.theme === "dark" ? "DARK" : "LIGHT"))}</button>
       </div>
     </header>
   `;
 }
 
 function renderTabBar(): string {
+  const tr = getTr();
   const active = getActiveAccount();
   const records = getActiveRecords();
-  const syncMeta = active && records.lastSyncAt ? `最後同步: ${records.lastSyncAt}` : "尚未同步";
+  const syncMeta = tr.lastSync(active ? records.lastSyncAt : undefined);
   return `
     <nav class="tabbar">
       <div class="tabs-left">
-        <button class="${state.tab === "char" ? "active" : ""}" data-tab="char">[1] 角色尋訪</button>
-        <button class="${state.tab === "weapon" ? "active" : ""}" data-tab="weapon">[2] 武器申領</button>
-        <button class="${state.tab === "import" ? "active" : ""}" data-tab="import">[3] 匯入 / 同步 / 帳號</button>
+        <button class="${state.tab === "char" ? "active" : ""}" data-tab="char">${escapeHtml(tr.tabChar)}</button>
+        <button class="${state.tab === "weapon" ? "active" : ""}" data-tab="weapon">${escapeHtml(tr.tabWeapon)}</button>
+        <button class="${state.tab === "import" ? "active" : ""}" data-tab="import">${escapeHtml(tr.tabImport)}</button>
       </div>
       <div class="sync-meta">${escapeHtml(syncMeta)}</div>
     </nav>
@@ -322,15 +392,16 @@ function renderTabBar(): string {
 }
 
 function renderStatsView(entries: PoolEntry[]): string {
+  const tr = getTr();
   if (entries.length === 0) {
     return `
       <fieldset class="tui-panel">
-        <legend class="tui-legend">無紀錄</legend>
+        <legend class="tui-legend">${escapeHtml(tr.noRecordsTitle)}</legend>
         <div class="empty-state">
-          <p>目前沒有抽卡紀錄。請先從遊戲日誌讀取、貼上抽卡連結，或載入示範資料預覽介面。</p>
+          <p>${escapeHtml(tr.noRecordsDesc)}</p>
           <div class="row" style="justify-content:center; margin-top: 12px;">
-            <button id="btn-go-import">[前往匯入 / 讀取日誌]</button>
-            <button id="btn-load-demo">[載入示範資料預覽]</button>
+            <button id="btn-go-import">${escapeHtml(tr.goImportBtn)}</button>
+            <button id="btn-load-demo">${escapeHtml(tr.loadDemoBtn)}</button>
           </div>
         </div>
       </fieldset>
@@ -363,7 +434,7 @@ function renderStatsView(entries: PoolEntry[]): string {
                 </div>
                 <div class="pool-item-sub">
                   <span class="c-gold">6★: ${st.count6}</span>
-                  <span>水位: ${st.pityCount}/${st.smallPityMax}</span>
+                  <span>${st.subPities ? "合併統計" : `水位: ${st.pityCount}/${st.smallPityMax}`}</span>
                 </div>
               </button>
             `;
@@ -409,6 +480,62 @@ function renderStatsView(entries: PoolEntry[]): string {
       `;
     }
   }
+
+  let tokenHtml = "";
+  if ((s.poolType === SPECIAL_POOL_KEY || s.poolType === RERUN_POOL_KEY) && s.poolId) {
+    const tokenStep = 240;
+    const validPulls =
+      s.poolType === RERUN_POOL_KEY
+        ? (s.officialTotalCount ?? s.paidPulls)
+        : s.paidPulls;
+    const tokenEarned = Math.floor(validPulls / tokenStep);
+    const tokenProg = validPulls % tokenStep;
+    const tokenRem = tokenStep - tokenProg;
+    tokenHtml = `
+      <div class="pity-row">
+        <span class="pity-label">信物進度</span>
+        <span class="ascii-bar ${tokenEarned > 0 ? "c-green" : "c-cyan"}">${renderAsciiBar(tokenProg, tokenStep, 22)}</span>
+        <span class="pity-text">${tokenProg} / ${tokenStep} <span class="c-muted">(距下個信物 ${tokenRem} 抽 | 已獲 ${tokenEarned} 個)</span></span>
+      </div>
+    `;
+  } else if (
+    (s.poolType === WEAPON_LIMITED_POOL_TYPE || s.poolType === WEAPON_RERUN_POOL_TYPE) &&
+    s.poolId
+  ) {
+    const validPulls =
+      s.poolType === WEAPON_RERUN_POOL_TYPE
+        ? (s.officialTotalCount ?? s.totalPulls)
+        : s.totalPulls;
+    const wg = computeWeaponGiftMilestone(validPulls);
+    tokenHtml = `
+      <div class="pity-row">
+        <span class="pity-label">申領贈禮</span>
+        <span class="ascii-bar ${wg.weaponsEarned > 0 ? "c-green" : "c-cyan"}">${renderAsciiBar(wg.prog, wg.span, 22)}</span>
+        <span class="pity-text">${wg.pulls} / ${wg.nextTarget} <span class="c-muted">(距${wg.nextLabel} ${wg.remaining} 抽 | 已獲 箱×${wg.boxesEarned} / UP×${wg.weaponsEarned})</span></span>
+      </div>
+    `;
+  }
+
+  const pitySectionHtml = s.subPities
+    ? `
+      <div class="pity-section">
+        <div class="pity-row">
+          <span class="pity-label">各池小保底</span>
+          <span class="c-cyan" style="grid-column: 2 / -1;">${s.subPities.map((sp) => `${escapeHtml(sp.label)} ${sp.pity}/${sp.max}`).join(" &nbsp;|&nbsp; ")}</span>
+        </div>
+      </div>
+    `
+    : `
+      <div class="pity-section">
+        <div class="pity-row">
+          <span class="pity-label">小保底水位</span>
+          <span class="ascii-bar ${pityColorClass(s.pityCount, s.smallPityMax)}">${smallBar}</span>
+          <span class="pity-text">${s.pityCount} / ${s.smallPityMax} <span class="c-muted">(距小保底 ${smallRem} 抽)</span></span>
+        </div>
+        ${bigPityHtml}
+        ${tokenHtml}
+      </div>
+    `;
 
   const filteredHistory = s.history6.filter((h) => {
     if (state.historyFilter === "offbanner") {
@@ -493,45 +620,38 @@ function renderStatsView(entries: PoolEntry[]): string {
           <legend class="tui-legend">${escapeHtml(s.poolName)}</legend>
           <div class="kpi-grid">
             <div class="kpi-cell">
-              <span class="kpi-label">總抽數</span>
+              <span class="kpi-label">${escapeHtml(tr.kpiTotalPulls)}</span>
               <span class="kpi-value">${s.totalPulls}</span>
-              <span class="kpi-sub">實際 ${s.paidPulls} / 加急 ${s.freePulls}</span>
+              <span class="kpi-sub">${escapeHtml(tr.kpiTotalSub(s.paidPulls, s.freePulls))}</span>
             </div>
             <div class="kpi-cell">
-              <span class="kpi-label">6★ 出貨</span>
+              <span class="kpi-label">${escapeHtml(tr.kpiCount6)}</span>
               <span class="kpi-value c-gold">${s.count6}</span>
-              <span class="kpi-sub">出貨率 ${rate6}%</span>
+              <span class="kpi-sub">${escapeHtml(tr.kpiRate6(rate6))}</span>
             </div>
             <div class="kpi-cell">
-              <span class="kpi-label">6★ 平均抽數</span>
+              <span class="kpi-label">${escapeHtml(tr.kpiAvg6)}</span>
               <span class="kpi-value c-cyan">${avgText}</span>
-              <span class="kpi-sub">不計入加急招募抽數</span>
+              <span class="kpi-sub">${escapeHtml(tr.kpiAvgSub)}</span>
             </div>
             <div class="kpi-cell">
-              <span class="kpi-label">UP 不歪率</span>
+              <span class="kpi-label">${escapeHtml(tr.kpiUpRate)}</span>
               <span class="kpi-value c-green">${upRateText}</span>
-              <span class="kpi-sub">依 UP 池統計</span>
+              <span class="kpi-sub">${escapeHtml(tr.kpiUpRateSub)}</span>
             </div>
             <div class="kpi-cell">
-              <span class="kpi-label">UP 6★ 出貨</span>
+              <span class="kpi-label">${escapeHtml(tr.kpiUp6)}</span>
               <span class="kpi-value c-green">${up6Text}</span>
-              <span class="kpi-sub">${up6Sub}</span>
+              <span class="kpi-sub">${upChecksCount > 0 ? escapeHtml(tr.kpiOffSub(upChecksCount - up6Count)) : escapeHtml(tr.kpiNoUpPool)}</span>
             </div>
             <div class="kpi-cell">
-              <span class="kpi-label">限定 6★ 出貨</span>
+              <span class="kpi-label">${escapeHtml(tr.kpiLimited6)}</span>
               <span class="kpi-value c-gold">${limited6Count}</span>
-              <span class="kpi-sub">${limited6Sub}</span>
+              <span class="kpi-sub">${s.count6 > 0 ? escapeHtml(tr.kpiLimitedSub(((limited6Count / s.count6) * 100).toFixed(0))) : escapeHtml(tr.kpiNo6)}</span>
             </div>
           </div>
 
-          <div class="pity-section">
-            <div class="pity-row">
-              <span class="pity-label">小保底水位</span>
-              <span class="ascii-bar ${pityColorClass(s.pityCount, s.smallPityMax)}">${smallBar}</span>
-              <span class="pity-text">${s.pityCount} / ${s.smallPityMax} <span class="c-muted">(距小保底 ${smallRem} 抽)</span></span>
-            </div>
-            ${bigPityHtml}
-          </div>
+          ${pitySectionHtml}
         </fieldset>
 
         <fieldset class="tui-panel">
@@ -656,10 +776,11 @@ function renderImportView(): string {
 }
 
 function renderStatusBar(): string {
+  const tr = getTr();
   return `
     <footer class="statusbar">
       <span class="statusbar-msg ${state.statusError ? "is-error" : ""}">${escapeHtml(state.statusText)}</span>
-      <span class="statusbar-hints">[1-3] 分頁  [+/-] 縮放  [0] 重設  [T] 主題</span>
+      <span class="statusbar-hints">${escapeHtml(tr.statusHints)}</span>
     </footer>
   `;
 }
@@ -755,9 +876,15 @@ async function runSyncWithInput(rawInput: string, fallbackProv: Provider, fallba
     state.store.activeAccountKey = acc.key;
 
     const existing = state.store.records[acc.key] || { char: {}, weapon: {} };
-    const result = await syncAccountGacha(acc, existing, state.store.poolInfo, (msg) => {
-      setStatus(msg);
-    });
+    const result = await syncAccountGacha(
+      acc,
+      existing,
+      state.store.poolInfo,
+      (msg) => {
+        setStatus(msg);
+      },
+      getApiLang(state.store.locale || "zh-TW"),
+    );
 
     state.store.records[acc.key] = result.records;
     state.store.poolInfo = result.poolInfo;
@@ -809,6 +936,12 @@ function bindEvents(): void {
   document.getElementById("account-select")?.addEventListener("change", async (e) => {
     state.store.activeAccountKey = (e.target as HTMLSelectElement).value;
     state.selectedPoolId = "";
+    await saveAppStore(state.store);
+    render();
+  });
+
+  document.getElementById("locale-select")?.addEventListener("change", async (e) => {
+    state.store.locale = (e.target as HTMLSelectElement).value as Locale;
     await saveAppStore(state.store);
     render();
   });
@@ -902,6 +1035,7 @@ function bindEvents(): void {
         stat: selected.stat,
         poolInfo: state.store.poolInfo,
         theme: state.store.theme,
+        locale: state.store.locale || "zh-TW",
         format: state.imgFormat,
         scale: state.imgScale,
         logicalWidth: state.imgWidth,

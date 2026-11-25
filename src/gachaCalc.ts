@@ -580,6 +580,52 @@ export const renderAsciiBar = (current: number, max: number, width = 20): string
   return `[${"█".repeat(filled)}${"░".repeat(width - filled)}]`;
 };
 
+export interface WeaponGiftMilestone {
+  pulls: number;
+  prog: number;
+  span: number;
+  nextTarget: number;
+  remaining: number;
+  nextLabel: "補充武庫箱" | "UP 武器";
+  boxesEarned: number;
+  weaponsEarned: number;
+}
+
+export const computeWeaponGiftMilestone = (pulls: number): WeaponGiftMilestone => {
+  const safePulls = Math.max(0, Math.floor(pulls));
+  const boxesEarned = safePulls >= 100 ? 1 + Math.floor((safePulls - 100) / 160) : 0;
+  const weaponsEarned = safePulls >= 180 ? 1 + Math.floor((safePulls - 180) / 160) : 0;
+
+  if (safePulls < 100) {
+    return {
+      pulls: safePulls,
+      prog: safePulls,
+      span: 100,
+      nextTarget: 100,
+      remaining: 100 - safePulls,
+      nextLabel: "補充武庫箱",
+      boxesEarned,
+      weaponsEarned,
+    };
+  }
+
+  const stepIndex = Math.floor((safePulls - 100) / 80);
+  const prevMilestone = 100 + stepIndex * 80;
+  const nextTarget = prevMilestone + 80;
+  const nextIsWeapon = stepIndex % 2 === 0;
+
+  return {
+    pulls: safePulls,
+    prog: safePulls - prevMilestone,
+    span: 80,
+    nextTarget,
+    remaining: nextTarget - safePulls,
+    nextLabel: nextIsWeapon ? "UP 武器" : "補充武庫箱",
+    boxesEarned,
+    weaponsEarned,
+  };
+};
+
 const STANDARD_6_CHAR_IDS = new Set([
   "chr_0009_azrila", // 餘燼
   "chr_0015_lifeng", // 黎風

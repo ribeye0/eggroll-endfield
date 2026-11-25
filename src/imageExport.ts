@@ -1,5 +1,14 @@
 import type { AccountInfo, GachaStatistics, PoolInfoEntry } from "./types";
-import { isLimited6Star, renderAsciiBar } from "./gachaCalc";
+import {
+  computeWeaponGiftMilestone,
+  isLimited6Star,
+  renderAsciiBar,
+  RERUN_POOL_KEY,
+  SPECIAL_POOL_KEY,
+  WEAPON_LIMITED_POOL_TYPE,
+  WEAPON_RERUN_POOL_TYPE,
+} from "./gachaCalc";
+import { TRANSLATIONS, type Locale } from "./i18n";
 
 export type ImageFormat = "png" | "jpeg" | "webp";
 export type UpscaleFactor = 1 | 2 | 3;
@@ -67,6 +76,7 @@ export async function renderStatsToImageBytes(params: {
   stat: GachaStatistics;
   poolInfo: Record<string, PoolInfoEntry>;
   theme: "dark" | "light";
+  locale?: Locale;
   format: ImageFormat;
   scale: UpscaleFactor;
   logicalWidth?: ImageWidth;
@@ -78,12 +88,14 @@ export async function renderStatsToImageBytes(params: {
     stat,
     poolInfo,
     theme,
+    locale = "zh-TW",
     format,
     scale,
     logicalWidth = 1080,
     fontScale = 1,
     historyLimit = 10,
   } = params;
+  const tr = TRANSLATIONS[locale];
   const pal = theme === "light" ? LIGHT_PALETTE : DARK_PALETTE;
 
   if (document.fonts?.ready) {
@@ -97,11 +109,20 @@ export async function renderStatsToImageBytes(params: {
   const allHistory = stat.history6;
   const history =
     historyLimit === "all" ? allHistory : allHistory.slice(0, Math.max(1, historyLimit));
-  const hasBigPity = !!(stat.bigPityMax && stat.bigPityMax > 0);
+  const hasSubPities = !!(stat.subPities && stat.subPities.length > 0);
+  const hasBigPity = !hasSubPities && !!(stat.bigPityMax && stat.bigPityMax > 0);
+  const hasTokenProgress =
+    (stat.poolType === SPECIAL_POOL_KEY || stat.poolType === RERUN_POOL_KEY) &&
+    !!stat.poolId;
+  const hasWeaponGiftProgress =
+    (stat.poolType === WEAPON_LIMITED_POOL_TYPE || stat.poolType === WEAPON_RERUN_POOL_TYPE) &&
+    !!stat.poolId;
 
   const headerH = Math.round(52 * fontScale);
   const kpiH = Math.round(74 * fontScale);
-  const pityBlockH = hasBigPity ? Math.round(70 * fontScale) : Math.round(40 * fontScale);
+  const pityLines =
+    1 + (hasBigPity ? 1 : 0) + (hasTokenProgress || hasWeaponGiftProgress ? 1 : 0);
+  const pityBlockH = Math.round((12 + pityLines * 28) * fontScale);
   const summaryH = Math.round(42 * fontScale) + kpiH + pityBlockH + 16;
   const tableTitleH = Math.round(40 * fontScale);
   const thH = Math.round(30 * fontScale);
@@ -178,12 +199,12 @@ export async function renderStatsToImageBytes(params: {
     stat.count6 > 0 ? `占 6★ ${((limited6Count / stat.count6) * 100).toFixed(0)}%` : "無 6★";
 
   const kpis = [
-    { label: "總抽數", value: `${stat.totalPulls}`, sub: `實際 ${stat.paidPulls} / 加急 ${stat.freePulls}`, color: pal.fg },
-    { label: "6★ 出貨", value: `${stat.count6}`, sub: `出貨率 ${rate6}%`, color: pal.gold },
-    { label: "6★ 平均抽數", value: avgText, sub: "不計入加急", color: pal.cyan },
-    { label: "UP 不歪率", value: upRateText, sub: "依 UP 池統計", color: pal.green },
-    { label: "UP 6★ 出貨", value: up6Text, sub: up6Sub, color: pal.green },
-    { label: "限定 6★ 出貨", value: `${limited6Count}`, sub: limited6Sub, color: pal.gold },
+    { label: tr.kpiTotalPulls, value: `${stat.totalPulls}`, sub: tr.kpiTotalSub(stat.paidPulls, stat.freePulls), color: pal.fg },
+    { label: tr.kpiCount6, value: `${stat.count6}`, sub: tr.kpiRate6(rate6), color: pal.gold },
+    { label: tr.kpiAvg6, value: avgText, sub: tr.kpiAvgSub, color: pal.cyan },
+    { label: tr.kpiUpRate, value: upRateText, sub: tr.kpiUpRateSub, color: pal.green },
+    { label: tr.kpiUp6, value: up6Text, sub: up6Sub, color: pal.green },
+    { label: tr.kpiLimited6, value: `${limited6Count}`, sub: limited6Sub, color: pal.gold },
   ];
 
   kpis.forEach((k, i) => {
@@ -213,39 +234,105 @@ export async function renderStatsToImageBytes(params: {
   const smallRem = Math.max(0, stat.smallPityMax - stat.pityCount);
   const smallBar = renderAsciiBar(stat.pityCount, stat.smallPityMax, barWidth);
 
-  ctx.font = `400 ${fs(13)}px ${fontMono}`;
-  ctx.fillStyle = pal.muted;
-  ctx.fillText("小保底水位", padX + 16, pityY);
-
-  ctx.font = `700 ${fs(13)}px ${fontMono}`;
-  ctx.fillStyle = pityColor(stat.pityCount, stat.smallPityMax, pal);
-  ctx.fillText(smallBar, barX, pityY);
-  const barMeasuredW = ctx.measureText(smallBar).width;
-
-  ctx.font = `400 ${fs(13)}px ${fontMono}`;
-  ctx.fillStyle = pal.fg;
-  ctx.fillText(`${stat.pityCount} / ${stat.smallPityMax} (距小保底 ${smallRem} 抽)`, barX + barMeasuredW + 14, pityY);
-
-  if (hasBigPity) {
-    const bpY = pityY + Math.round(28 * fontScale);
+  if (hasSubPities) {
     ctx.font = `400 ${fs(13)}px ${fontMono}`;
     ctx.fillStyle = pal.muted;
-    ctx.fillText("大保底進度", padX + 16, bpY);
-    if (stat.gotUp6) {
+    ctx.fillText("各池小保底", padX + 16, pityY);
+
+    const summaryLine = stat
+      .subPities!.map((sp) => `${sp.label} ${sp.pity}/${sp.max}`)
+      .join("   |   ");
+    ctx.font = `700 ${fs(13)}px ${fontMono}`;
+    ctx.fillStyle = pal.cyan;
+    ctx.fillText(summaryLine, barX, pityY);
+  } else {
+    ctx.font = `400 ${fs(13)}px ${fontMono}`;
+    ctx.fillStyle = pal.muted;
+    ctx.fillText("小保底水位", padX + 16, pityY);
+
+    ctx.font = `700 ${fs(13)}px ${fontMono}`;
+    ctx.fillStyle = pityColor(stat.pityCount, stat.smallPityMax, pal);
+    ctx.fillText(smallBar, barX, pityY);
+    const barMeasuredW = ctx.measureText(smallBar).width;
+
+    ctx.font = `400 ${fs(13)}px ${fontMono}`;
+    ctx.fillStyle = pal.fg;
+    ctx.fillText(`${stat.pityCount} / ${stat.smallPityMax} (距小保底 ${smallRem} 抽)`, barX + barMeasuredW + 14, pityY);
+
+    if (hasBigPity) {
+      const bpY = pityY + Math.round(28 * fontScale);
+      ctx.font = `400 ${fs(13)}px ${fontMono}`;
+      ctx.fillStyle = pal.muted;
+      ctx.fillText("大保底進度", padX + 16, bpY);
+      if (stat.gotUp6) {
+        ctx.font = `700 ${fs(13)}px ${fontMono}`;
+        ctx.fillStyle = pal.green;
+        ctx.fillText("[✓ 已取得當期 UP 6★]", barX, bpY);
+      } else {
+        const bc = stat.bigPityCount ?? 0;
+        const bmax = stat.bigPityMax!;
+        const brem = stat.bigPityRemaining ?? Math.max(0, bmax - bc);
+        const bigBar = renderAsciiBar(bc, bmax, barWidth);
+        ctx.font = `700 ${fs(13)}px ${fontMono}`;
+        ctx.fillStyle = pal.gold;
+        ctx.fillText(bigBar, barX, bpY);
+        ctx.font = `400 ${fs(13)}px ${fontMono}`;
+        ctx.fillStyle = pal.fg;
+        ctx.fillText(`${bc} / ${bmax} (距大保底 ${brem} 抽)`, barX + barMeasuredW + 14, bpY);
+      }
+    }
+
+    if (hasTokenProgress) {
+      const tkY = pityY + Math.round((hasBigPity ? 56 : 28) * fontScale);
+      const tokenStep = 240;
+      const validPulls =
+        stat.poolType === RERUN_POOL_KEY
+          ? (stat.officialTotalCount ?? stat.paidPulls)
+          : stat.paidPulls;
+      const tokenEarned = Math.floor(validPulls / tokenStep);
+      const tokenProg = validPulls % tokenStep;
+      const tokenRem = tokenStep - tokenProg;
+      const tokenBar = renderAsciiBar(tokenProg, tokenStep, barWidth);
+
+      ctx.font = `400 ${fs(13)}px ${fontMono}`;
+      ctx.fillStyle = pal.muted;
+      ctx.fillText("信物進度", padX + 16, tkY);
+
       ctx.font = `700 ${fs(13)}px ${fontMono}`;
-      ctx.fillStyle = pal.green;
-      ctx.fillText("[✓ 已取得當期 UP 6★]", barX, bpY);
-    } else {
-      const bc = stat.bigPityCount ?? 0;
-      const bmax = stat.bigPityMax!;
-      const brem = stat.bigPityRemaining ?? Math.max(0, bmax - bc);
-      const bigBar = renderAsciiBar(bc, bmax, barWidth);
-      ctx.font = `700 ${fs(13)}px ${fontMono}`;
-      ctx.fillStyle = pal.gold;
-      ctx.fillText(bigBar, barX, bpY);
+      ctx.fillStyle = tokenEarned > 0 ? pal.green : pal.cyan;
+      ctx.fillText(tokenBar, barX, tkY);
+
       ctx.font = `400 ${fs(13)}px ${fontMono}`;
       ctx.fillStyle = pal.fg;
-      ctx.fillText(`${bc} / ${bmax} (距大保底 ${brem} 抽)`, barX + barMeasuredW + 14, bpY);
+      ctx.fillText(
+        `${tokenProg} / ${tokenStep} (距下個信物 ${tokenRem} 抽 | 已獲 ${tokenEarned} 個)`,
+        barX + barMeasuredW + 14,
+        tkY,
+      );
+    } else if (hasWeaponGiftProgress) {
+      const wgY = pityY + Math.round((hasBigPity ? 56 : 28) * fontScale);
+      const validPulls =
+        stat.poolType === WEAPON_RERUN_POOL_TYPE
+          ? (stat.officialTotalCount ?? stat.totalPulls)
+          : stat.totalPulls;
+      const wg = computeWeaponGiftMilestone(validPulls);
+      const wgBar = renderAsciiBar(wg.prog, wg.span, barWidth);
+
+      ctx.font = `400 ${fs(13)}px ${fontMono}`;
+      ctx.fillStyle = pal.muted;
+      ctx.fillText("申領贈禮", padX + 16, wgY);
+
+      ctx.font = `700 ${fs(13)}px ${fontMono}`;
+      ctx.fillStyle = wg.weaponsEarned > 0 ? pal.green : pal.cyan;
+      ctx.fillText(wgBar, barX, wgY);
+
+      ctx.font = `400 ${fs(13)}px ${fontMono}`;
+      ctx.fillStyle = pal.fg;
+      ctx.fillText(
+        `${wg.pulls} / ${wg.nextTarget} (距${wg.nextLabel} ${wg.remaining} 抽 | 已獲 箱×${wg.boxesEarned} / UP×${wg.weaponsEarned})`,
+        barX + barMeasuredW + 14,
+        wgY,
+      );
     }
   }
 

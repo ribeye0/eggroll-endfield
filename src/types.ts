@@ -1,3 +1,5 @@
+import type { Locale } from "./i18n";
+
 export type Provider = "hypergryph" | "gryphline";
 
 export interface AccountInfo {
@@ -68,6 +70,7 @@ export interface AppStore {
   records: Record<string, AccountRecords>;
   poolInfo: Record<string, PoolInfoEntry>;
   theme: "dark" | "light";
+  locale?: Locale;
   zoom?: number;
   historyLimit?: number | "all";
 }
@@ -107,5 +110,6 @@ export interface GachaStatistics {
   count4: number;
   avgPity6: number | null;
   upWinRate: number | null;
+  subPities?: Array<{ label: string; pity: number; max: number }>;
   history6: HistoryRecord[];
 }
