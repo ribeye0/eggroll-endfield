@@ -107,8 +107,8 @@ const state = {
   manualServerId: "auto",
   imgModalOpen: false,
   imgFormat: "png" as ImageFormat,
-  imgScale: 2 as UpscaleFactor,
-  imgWidth: 1080 as ImageWidth,
+  imgScale: 3 as UpscaleFactor,
+  imgWidth: 780 as ImageWidth,
   imgFontScale: 1 as FontScale,
   imgHistoryLimit: 10 as number | "all",
   imgGroupByPool: true,
@@ -934,10 +934,9 @@ function renderImageModal(): string {
           </div>
           <div class="row">
             <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgWidth)}</span>
-            <button class="${state.imgWidth === 900 ? "active" : ""}" data-img-width="900">900px</button>
-            <button class="${state.imgWidth === 1080 ? "active" : ""}" data-img-width="1080">1080px</button>
-            <button class="${state.imgWidth === 1280 ? "active" : ""}" data-img-width="1280">1280px</button>
-            <button class="${state.imgWidth === 1440 ? "active" : ""}" data-img-width="1440">1440px</button>
+            <button class="${state.imgWidth === 680 ? "active" : ""}" data-img-width="680" title="680px">${escapeHtml(tr.imgWidthNarrow)}</button>
+            <button class="${state.imgWidth === 780 ? "active" : ""}" data-img-width="780" title="780px">${escapeHtml(tr.imgWidthMedium)}</button>
+            <button class="${state.imgWidth === 900 ? "active" : ""}" data-img-width="900" title="900px">${escapeHtml(tr.imgWidthWide)}</button>
           </div>
           <div class="row">
             <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgFont)}</span>
@@ -949,8 +948,9 @@ function renderImageModal(): string {
           <div class="row">
             <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgScale)}</span>
             <button class="${state.imgScale === 1 ? "active" : ""}" data-img-scale="1">1x</button>
-            <button class="${state.imgScale === 2 ? "active" : ""}" data-img-scale="2">${escapeHtml(tr.imgScaleRec)}</button>
-            <button class="${state.imgScale === 3 ? "active" : ""}" data-img-scale="3">3x</button>
+            <button class="${state.imgScale === 2 ? "active" : ""}" data-img-scale="2">2x</button>
+            <button class="${state.imgScale === 3 ? "active" : ""}" data-img-scale="3">${escapeHtml(tr.imgScaleRec)}</button>
+            <button class="${state.imgScale === 4 ? "active" : ""}" data-img-scale="4">4x</button>
             <span class="c-muted">${escapeHtml(tr.imgOutWidth(state.imgWidth * state.imgScale))}</span>
           </div>
           ${
@@ -969,9 +969,11 @@ function renderImageModal(): string {
               ? `
           <div class="row">
             <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgPoolCount)}</span>
+            <button class="${state.imgPoolLimit === 1 ? "active" : ""}" data-img-pool-limit="1">1</button>
+            <button class="${state.imgPoolLimit === 2 ? "active" : ""}" data-img-pool-limit="2">2</button>
             <button class="${state.imgPoolLimit === 3 ? "active" : ""}" data-img-pool-limit="3">3</button>
+            <button class="${state.imgPoolLimit === 4 ? "active" : ""}" data-img-pool-limit="4">4</button>
             <button class="${state.imgPoolLimit === 5 ? "active" : ""}" data-img-pool-limit="5">5</button>
-            <button class="${state.imgPoolLimit === 10 ? "active" : ""}" data-img-pool-limit="10">10</button>
             <button class="${state.imgPoolLimit === "all" ? "active" : ""}" data-img-pool-limit="all">${escapeHtml(tr.allOpt)}</button>
           </div>
           `

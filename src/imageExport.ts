@@ -12,8 +12,8 @@ import { TRANSLATIONS, type Locale } from "./i18n";
 import { localizeItemName, localizePoolName } from "./itemI18n";
 
 export type ImageFormat = "png" | "jpeg" | "webp";
-export type UpscaleFactor = 1 | 2 | 3;
-export type ImageWidth = 900 | 1080 | 1280 | 1440;
+export type UpscaleFactor = 1 | 2 | 3 | 4;
+export type ImageWidth = 680 | 780 | 900;
 export type FontScale = 0.9 | 1 | 1.15 | 1.3;
 
 interface Palette {
@@ -94,7 +94,7 @@ export async function renderStatsToImageBytes(params: {
     locale = "zh-TW",
     format,
     scale,
-    logicalWidth = 1080,
+    logicalWidth = 780,
     fontScale = 1,
     historyLimit = 10,
     groupByPool = true,
@@ -108,7 +108,7 @@ export async function renderStatsToImageBytes(params: {
   }
 
   const fs = (px: number) => Math.round(px * fontScale);
-  const padX = 28;
+  const padX = logicalWidth <= 700 ? 20 : 28;
   const padY = 24;
   const rowH = Math.round(34 * fontScale);
   const allHistory = stat.history6;
@@ -276,7 +276,7 @@ export async function renderStatsToImageBytes(params: {
   // Pity bars
   const pityY = kpiY + kpiH + Math.round(22 * fontScale);
   const barX = padX + Math.round(114 * fontScale);
-  const barWidth = logicalWidth >= 1200 ? 28 : 22;
+  const barWidth = logicalWidth >= 1200 ? 28 : logicalWidth <= 700 ? 16 : 22;
   const smallRem = Math.max(0, stat.smallPityMax - stat.pityCount);
   const smallBar = renderAsciiBar(stat.pityCount, stat.smallPityMax, barWidth);
 
@@ -472,7 +472,7 @@ export async function renderStatsToImageBytes(params: {
 
     ctx.font = `700 ${fs(12)}px ${fontMono}`;
     ctx.fillText(
-      h.isFree ? "[FREE_PULL]" : renderAsciiBar(h.pity, stat.smallPityMax, 12),
+      h.isFree ? "[FREE_PULL]" : renderAsciiBar(h.pity, stat.smallPityMax, logicalWidth <= 700 ? 10 : 12),
       cols.bar,
       cy,
     );
