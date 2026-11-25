@@ -1,5 +1,7 @@
 # EggRoll 終末地抽卡分析工具
 
+**繁體中文** | [English](README.en.md)
+
 極簡、純文字 TUI 風格的《明日方舟：終末地》本地抽卡分析工具。
 
 支援繁體中文、简体中文、日本語、English、한국어 五種語言。
@@ -41,4 +43,4 @@ pnpm tauri build
 ```
 
 ## LICENSE
-MIT
+[MIT](LICENSE)
