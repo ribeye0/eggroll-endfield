@@ -123,10 +123,14 @@ export async function renderStatsToImageBytes(params: {
 
   const headerH = Math.round(52 * fontScale);
   const kpiH = Math.round(74 * fontScale);
+  const kpiCols = 3;
+  const kpiRows = 2;
+  const kpiGap = 8;
+  const kpiTotalH = kpiH * kpiRows + kpiGap * (kpiRows - 1);
   const pityLines =
     1 + (hasBigPity ? 1 : 0) + (hasTokenProgress || hasWeaponGiftProgress ? 1 : 0);
   const pityBlockH = Math.round((12 + pityLines * 28) * fontScale);
-  const summaryH = Math.round(42 * fontScale) + kpiH + pityBlockH + 16;
+  const summaryH = Math.round(42 * fontScale) + kpiTotalH + pityBlockH + 16;
   const tableTitleH = Math.round(40 * fontScale);
   const thH = Math.round(30 * fontScale);
   const isOverview = hasSubPities || !stat.poolId;
@@ -231,8 +235,7 @@ export async function renderStatsToImageBytes(params: {
   );
 
   const kpiY = y + Math.round(38 * fontScale);
-  const kpiGap = 8;
-  const kpiW = (innerW - 28 - kpiGap * 5) / 6;
+  const kpiW = (innerW - 28 - kpiGap * (kpiCols - 1)) / kpiCols;
   const rate6 = stat.totalPulls > 0 ? ((stat.count6 / stat.totalPulls) * 100).toFixed(2) : "0.00";
   const avgText = stat.avgPity6 !== null ? `${stat.avgPity6.toFixed(1)} ${tr.pullsUnit}` : "-";
   const upRateText = stat.upWinRate !== null ? `${stat.upWinRate.toFixed(1)}%` : "-";
@@ -254,27 +257,30 @@ export async function renderStatsToImageBytes(params: {
   ];
 
   kpis.forEach((k, i) => {
-    const kx = padX + 14 + i * (kpiW + kpiGap);
+    const col = i % kpiCols;
+    const row = Math.floor(i / kpiCols);
+    const kx = padX + 14 + col * (kpiW + kpiGap);
+    const ky = kpiY + row * (kpiH + kpiGap);
     ctx.fillStyle = pal.elevated;
-    ctx.fillRect(kx, kpiY, kpiW, kpiH);
+    ctx.fillRect(kx, ky, kpiW, kpiH);
     ctx.strokeStyle = pal.border;
-    ctx.strokeRect(kx + 0.5, kpiY + 0.5, kpiW - 1, kpiH - 1);
+    ctx.strokeRect(kx + 0.5, ky + 0.5, kpiW - 1, kpiH - 1);
 
     ctx.font = `400 ${fs(12)}px ${fontMono}`;
     ctx.fillStyle = pal.muted;
-    ctx.fillText(k.label, kx + 10, kpiY + kpiH * 0.23);
+    ctx.fillText(k.label, kx + 10, ky + kpiH * 0.23);
 
     ctx.font = `700 ${fs(18)}px ${fontMono}`;
     ctx.fillStyle = k.color;
-    ctx.fillText(k.value, kx + 10, kpiY + kpiH * 0.54);
+    ctx.fillText(k.value, kx + 10, ky + kpiH * 0.54);
 
     ctx.font = `400 ${fs(11)}px ${fontMono}`;
     ctx.fillStyle = pal.muted;
-    ctx.fillText(k.sub, kx + 10, kpiY + kpiH * 0.81);
+    ctx.fillText(k.sub, kx + 10, ky + kpiH * 0.81);
   });
 
   // Pity bars
-  const pityY = kpiY + kpiH + Math.round(22 * fontScale);
+  const pityY = kpiY + kpiTotalH + Math.round(22 * fontScale);
   const barX = padX + Math.round(132 * fontScale);
   const barWidth = logicalWidth >= 1200 ? 28 : logicalWidth <= 700 ? 16 : 22;
   const smallRem = Math.max(0, stat.smallPityMax - stat.pityCount);
