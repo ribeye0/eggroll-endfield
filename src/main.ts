@@ -812,10 +812,10 @@ function renderImportView(): string {
           .map(
             (a) => `
               <div class="account-row">
-                <span>
-                  <strong>${escapeHtml(a.nickName)}</strong>
-                  <span class="c-muted">(${escapeHtml(a.roleId || a.uid)} / ${escapeHtml(a.serverName)})</span>
-                </span>
+                <div class="account-info">
+                  <div class="account-name"><strong>${escapeHtml(a.nickName)}</strong></div>
+                  <div class="account-meta c-muted">${escapeHtml(a.roleId || a.uid)} / ${escapeHtml(a.serverName)}</div>
+                </div>
                 <div class="row">
                   <button data-use-account="${escapeHtml(a.key)}">${escapeHtml(tr.switchBtn)}</button>
                   <button class="c-red" data-del-account="${escapeHtml(a.key)}">${escapeHtml(tr.deleteBtn)}</button>

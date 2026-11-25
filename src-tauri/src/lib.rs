@@ -70,6 +70,146 @@ fn candidate_log_paths(provider_hint: Option<&str>) -> Vec<(String, PathBuf)> {
     paths
 }
 
+fn is_token_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'_' | b'-')
+}
+
+fn percent_encode_token(token: &str) -> String {
+    let mut out = String::with_capacity(token.len());
+    for ch in token.chars() {
+        match ch {
+            '+' => out.push_str("%2B"),
+            '/' => out.push_str("%2F"),
+            '=' => out.push_str("%3D"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn extract_u8_token_from_session_bytes(
+    data: &[u8],
+    provider_hint: Option<&str>,
+) -> Option<(String, String)> {
+    let needle_prefix = b"map-";
+    let needle_suffix = b"-u8_token";
+    let mut last_match: Option<(String, String)> = None;
+
+    let mut i = 0;
+    while i + needle_prefix.len() + needle_suffix.len() < data.len() {
+        if &data[i..i + needle_prefix.len()] == needle_prefix {
+            let mut j = i + needle_prefix.len();
+            while j < data.len() && data[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + needle_prefix.len()
+                && j + needle_suffix.len() <= data.len()
+                && &data[j..j + needle_suffix.len()] == needle_suffix
+            {
+                let val_start_search = j + needle_suffix.len();
+                let search_end = (val_start_search + 6).min(data.len());
+                let mut k = val_start_search;
+                while k + 1 < search_end {
+                    if is_token_byte(data[k]) && data[k + 1] == 0 {
+                        break;
+                    }
+                    k += 1;
+                }
+                if k + 1 < search_end && is_token_byte(data[k]) && data[k + 1] == 0 {
+                    let mut token = String::new();
+                    let mut p = k;
+                    while p + 1 < data.len() && is_token_byte(data[p]) && data[p + 1] == 0 {
+                        token.push(data[p] as char);
+                        p += 2;
+                    }
+                    if token.len() >= 32 {
+                        let ctx_start = i.saturating_sub(512);
+                        let ctx = String::from_utf8_lossy(&data[ctx_start..i]);
+                        let prov = if ctx.contains("hypergryph.com") {
+                            "hypergryph"
+                        } else if ctx.contains("gryphline.com") {
+                            "gryphline"
+                        } else {
+                            provider_hint.unwrap_or("gryphline")
+                        };
+                        let url = format!(
+                            "https://ef-webview.{prov}.com/page/gacha_char?u8_token={}",
+                            percent_encode_token(&token)
+                        );
+                        last_match = Some((url, prov.to_string()));
+                    }
+                    i = p;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    last_match
+}
+
+fn find_session_storage_dir_from_path(path: &std::path::Path) -> Option<PathBuf> {
+    if path.is_dir() && path.file_name().and_then(|n| n.to_str()) == Some("Session Storage") {
+        return Some(path.to_path_buf());
+    }
+    let mut cur = if path.is_dir() {
+        Some(path)
+    } else {
+        path.parent()
+    };
+    for _ in 0..6 {
+        let Some(dir) = cur else { break };
+        if dir.file_name().and_then(|n| n.to_str()) == Some("Session Storage") {
+            return Some(dir.to_path_buf());
+        }
+        let candidate = dir.join("Local/PlatformProcess/QtWebEngine/Default/Session Storage");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        let candidate_appdata =
+            dir.join("AppData/Local/PlatformProcess/QtWebEngine/Default/Session Storage");
+        if candidate_appdata.is_dir() {
+            return Some(candidate_appdata);
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
+fn extract_from_session_storage_dir(
+    dir: &std::path::Path,
+    provider_hint: Option<&str>,
+) -> Option<LogDetectionResult> {
+    let entries = fs::read_dir(dir).ok()?;
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext == "log" || ext == "ldb" {
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            files.push((mtime, p));
+        }
+    }
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+
+    for (_, p) in files {
+        if let Ok(bytes) = fs::read(&p) {
+            if let Some((url, prov)) = extract_u8_token_from_session_bytes(&bytes, provider_hint) {
+                return Some(LogDetectionResult {
+                    url,
+                    provider: prov,
+                    path: p.display().to_string(),
+                });
+            }
+        }
+    }
+    None
+}
+
 #[tauri::command]
 fn detect_gacha_log(
     provider: Option<String>,
@@ -79,30 +219,69 @@ fn detect_gacha_log(
         let trimmed = raw_path.trim();
         if !trimmed.is_empty() {
             let path = PathBuf::from(trimmed);
-            let content = fs::read_to_string(&path)
-                .map_err(|e| format!("讀取指定日誌失敗 ({}): {e}", path.display()))?;
-            if let Some((url, prov)) = extract_gacha_url_from_content(&content, provider.as_deref()) {
-                return Ok(LogDetectionResult {
-                    url,
-                    provider: prov,
-                    path: path.display().to_string(),
-                });
+            if path.is_file() {
+                let bytes = fs::read(&path)
+                    .map_err(|e| format!("讀取指定日誌失敗 ({}): {e}", path.display()))?;
+                let content = String::from_utf8_lossy(&bytes);
+                if let Some((url, prov)) =
+                    extract_gacha_url_from_content(&content, provider.as_deref())
+                {
+                    return Ok(LogDetectionResult {
+                        url,
+                        provider: prov,
+                        path: path.display().to_string(),
+                    });
+                }
+                if let Some((url, prov)) =
+                    extract_u8_token_from_session_bytes(&bytes, provider.as_deref())
+                {
+                    return Ok(LogDetectionResult {
+                        url,
+                        provider: prov,
+                        path: path.display().to_string(),
+                    });
+                }
             }
-            return Err("指定日誌中未找到抽卡連結，請先在遊戲內打開一次尋訪紀錄頁面。".to_string());
+            if path.is_dir() {
+                if let Some(res) = extract_from_session_storage_dir(&path, provider.as_deref()) {
+                    return Ok(res);
+                }
+            }
+            if let Some(ss_dir) = find_session_storage_dir_from_path(&path) {
+                if let Some(res) = extract_from_session_storage_dir(&ss_dir, provider.as_deref()) {
+                    return Ok(res);
+                }
+            }
+            return Err(
+                "指定日誌與鄰近 QtWebEngine Session Storage 中未找到抽卡連結或 u8_token，請先在遊戲內打開一次尋訪紀錄頁面。"
+                    .to_string(),
+            );
         }
     }
 
     let candidates = candidate_log_paths(provider.as_deref());
     for (prov, path) in &candidates {
         if path.exists() {
-            if let Ok(content) = fs::read_to_string(path) {
-                if let Some((url, detected_prov)) = extract_gacha_url_from_content(&content, Some(prov)) {
+            if let Ok(bytes) = fs::read(path) {
+                let content = String::from_utf8_lossy(&bytes);
+                if let Some((url, detected_prov)) =
+                    extract_gacha_url_from_content(&content, Some(prov))
+                {
                     return Ok(LogDetectionResult {
                         url,
                         provider: detected_prov,
                         path: path.display().to_string(),
                     });
                 }
+            }
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let ss_dir = home.join("AppData/Local/PlatformProcess/QtWebEngine/Default/Session Storage");
+        if ss_dir.is_dir() {
+            if let Some(res) = extract_from_session_storage_dir(&ss_dir, provider.as_deref()) {
+                return Ok(res);
             }
         }
     }
@@ -249,4 +428,30 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_latest_u8_token_from_session_storage_bytes() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"namespace-abc-https://ef-webview.gryphline.com/\x00");
+        buf.extend_from_slice(b"map-13-u8_token\xd0\t");
+        let fake_token = "AbCdEf0123456789+GhIjKlMnOpQrStUvWxYz/==";
+        for b in fake_token.bytes() {
+            buf.push(b);
+            buf.push(0);
+        }
+        buf.extend_from_slice(b"\x00\x05map-13-u8_token\x00'map-13-version");
+
+        let (url, prov) =
+            extract_u8_token_from_session_bytes(&buf, Some("gryphline")).expect("should extract");
+        assert_eq!(prov, "gryphline");
+        assert_eq!(
+            url,
+            "https://ef-webview.gryphline.com/page/gacha_char?u8_token=AbCdEf0123456789%2BGhIjKlMnOpQrStUvWxYz%2F%3D%3D"
+        );
+    }
 }
