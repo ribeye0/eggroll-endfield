@@ -516,7 +516,8 @@ table {
 
 .history-table th:nth-child(5),
 .history-table td:nth-child(5) {
-  width: 110px;
+  width: 124px;
+  overflow: hidden;
 }
 
 .history-table th:nth-child(6),
