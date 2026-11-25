@@ -13,6 +13,7 @@ import {
   SPECIAL_POOL_KEY,
   STANDARD_POOL_KEY,
 } from "./gachaCalc";
+import { TRANSLATIONS, type Locale } from "./i18n";
 
 export const AKEGF_VERSION = "v0.4" as const;
 export const AKEGF_HOME_URL = "https://www.akedata.wiki/?plugin=akegf&id=home";
@@ -229,9 +230,13 @@ export function isAkegfDocument(data: unknown): data is AkegfDocument {
   );
 }
 
-export function importFromAkegf(doc: AkegfDocument): ImportedAccountBundle[] {
+export function importFromAkegf(
+  doc: AkegfDocument,
+  locale: Locale = "zh-TW",
+): ImportedAccountBundle[] {
+  const tr = TRANSLATIONS[locale];
   if (!Array.isArray(doc.endfield) || doc.endfield.length === 0) {
-    throw new Error("AKEGF 檔案缺少 endfield 帳號陣列");
+    throw new Error(tr.errAkegfNoAccounts);
   }
 
   const results: ImportedAccountBundle[] = [];
@@ -241,11 +246,11 @@ export function importFromAkegf(doc: AkegfDocument): ImportedAccountBundle[] {
     const serverId =
       nonEmptyText(rawAcc.server_id) || (region === "cn" ? "1" : "");
     if (region === "global" && !serverId) {
-      throw new Error(`國際服帳號 ${rawAcc.uid} 缺少必要的 server_id`);
+      throw new Error(tr.errAkegfNoServerId(String(rawAcc.uid || "")));
     }
     const roleId = nonEmptyText(rawAcc.uid);
     if (!roleId) {
-      throw new Error("AKEGF 帳號缺少 uid");
+      throw new Error(tr.errAkegfNoUid);
     }
 
     const provider: Provider = region === "global" ? "gryphline" : "hypergryph";
@@ -274,7 +279,7 @@ export function importFromAkegf(doc: AkegfDocument): ImportedAccountBundle[] {
         nonEmptyText(pull.item_name) ||
         nonEmptyText(pull.name_text) ||
         nonEmptyText(pull.gift_reward_label) ||
-        "未知";
+        tr.unknownItem;
       const rarity = typeof pull.rarity === "number" ? pull.rarity : 0;
 
       if (recordType === "weapon") {
@@ -318,7 +323,7 @@ export function importFromAkegf(doc: AkegfDocument): ImportedAccountBundle[] {
         roleId,
         nickName: roleId,
         serverId,
-        serverName: region === "global" ? `Global-${serverId}` : "國服",
+        serverName: region === "global" ? `Global-${serverId}` : tr.serverCn,
         provider,
       },
       records: {

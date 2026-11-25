@@ -64,6 +64,12 @@ export interface AccountRecords {
   lastSyncAt?: string;
 }
 
+export interface RemoteCatalogCache {
+  updatedAt?: string;
+  items?: Record<string, Record<Locale, string>>;
+  pools?: Record<string, Record<Locale, string>>;
+}
+
 export interface AppStore {
   accounts: AccountInfo[];
   activeAccountKey?: string;
@@ -73,6 +79,7 @@ export interface AppStore {
   locale?: Locale;
   zoom?: number;
   historyLimit?: number | "all";
+  remoteCatalog?: RemoteCatalogCache;
 }
 
 export interface HistoryRecord {

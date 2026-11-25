@@ -83,6 +83,8 @@ export async function renderStatsToImageBytes(params: {
   logicalWidth?: ImageWidth;
   fontScale?: FontScale;
   historyLimit?: number | "all";
+  groupByPool?: boolean;
+  poolLimit?: number | "all";
 }): Promise<{ bytes: Uint8Array; mimeType: string; width: number; height: number }> {
   const {
     account,
@@ -95,6 +97,8 @@ export async function renderStatsToImageBytes(params: {
     logicalWidth = 1080,
     fontScale = 1,
     historyLimit = 10,
+    groupByPool = true,
+    poolLimit = 5,
   } = params;
   const tr = TRANSLATIONS[locale];
   const pal = theme === "light" ? LIGHT_PALETTE : DARK_PALETTE;
@@ -108,8 +112,6 @@ export async function renderStatsToImageBytes(params: {
   const padY = 24;
   const rowH = Math.round(34 * fontScale);
   const allHistory = stat.history6;
-  const history =
-    historyLimit === "all" ? allHistory : allHistory.slice(0, Math.max(1, historyLimit));
   const hasSubPities = !!(stat.subPities && stat.subPities.length > 0);
   const hasBigPity = !hasSubPities && !!(stat.bigPityMax && stat.bigPityMax > 0);
   const hasTokenProgress =
@@ -127,8 +129,47 @@ export async function renderStatsToImageBytes(params: {
   const summaryH = Math.round(42 * fontScale) + kpiH + pityBlockH + 16;
   const tableTitleH = Math.round(40 * fontScale);
   const thH = Math.round(30 * fontScale);
+  const isOverview = hasSubPities || !stat.poolId;
+  const useGrouped = groupByPool && isOverview;
+
+  const allPoolGroups: Array<{
+    title: string;
+    items: Array<{ item: (typeof allHistory)[number]; num: number }>;
+  }> = [];
+  if (useGrouped && allHistory.length > 0) {
+    const groupMap = new Map<string, (typeof allPoolGroups)[number]>();
+    allHistory.forEach((h, idx) => {
+      const key = h.poolId || h.poolName || "-";
+      const title = localizePoolName(h.poolId, h.poolName, locale) || "-";
+      if (!groupMap.has(key)) {
+        const g = { title, items: [] };
+        groupMap.set(key, g);
+        allPoolGroups.push(g);
+      }
+      groupMap.get(key)!.items.push({ item: h, num: idx + 1 });
+    });
+  }
+
+  const poolGroups = useGrouped
+    ? poolLimit === "all"
+      ? allPoolGroups
+      : allPoolGroups.slice(0, Math.max(1, poolLimit))
+    : [];
+  const history = useGrouped
+    ? poolGroups.flatMap((g) => g.items.map((x) => x.item))
+    : historyLimit === "all"
+      ? allHistory
+      : allHistory.slice(0, Math.max(1, historyLimit));
+
+  const groupHeaderH = Math.round(28 * fontScale);
+  const groupGap = 10;
   const tableHeaderH = tableTitleH + thH + 4;
-  const tableBodyH = Math.max(1, history.length) * rowH + 16;
+  const tableBodyH =
+    useGrouped && poolGroups.length > 0
+      ? poolGroups.reduce((acc, g) => acc + groupHeaderH + g.items.length * rowH + 8, 0) +
+        Math.max(0, poolGroups.length - 1) * groupGap +
+        14
+      : Math.max(1, history.length) * rowH + 16;
   const footerH = Math.round(32 * fontScale);
   const logicalH =
     padY * 2 + headerH + 14 + summaryH + 14 + tableHeaderH + tableBodyH + 14 + footerH;
@@ -395,60 +436,95 @@ export async function renderStatsToImageBytes(params: {
   ctx.fillText(tr.colPulls, cols.pity, thY + thH / 2);
   ctx.fillText(tr.colBar, cols.bar, thY + thH / 2);
   ctx.fillText(tr.colTags, cols.tags, thY + thH / 2);
-  ctx.fillText(tr.colPoolTime, cols.poolTime, thY + thH / 2);
+  ctx.fillText(
+    useGrouped && poolGroups.length > 0 ? tr.sortTime : tr.colPoolTime,
+    cols.poolTime,
+    thY + thH / 2,
+  );
+
+  const drawHistoryRow = (
+    h: (typeof history)[number],
+    rowNum: number,
+    rowIdxInGroup: number,
+    ry: number,
+    bx: number,
+    bw: number,
+    showPool: boolean,
+  ) => {
+    const cy = ry + rowH / 2;
+    if (rowIdxInGroup % 2 === 1) {
+      ctx.fillStyle = pal.elevated;
+      ctx.fillRect(bx, ry, bw, rowH);
+    }
+
+    ctx.font = `400 ${fs(12)}px ${fontMono}`;
+    ctx.fillStyle = pal.muted;
+    ctx.fillText(String(rowNum), cols.idx, cy);
+
+    ctx.font = `700 ${fs(13)}px ${fontMono}`;
+    ctx.fillStyle = pal.gold;
+    ctx.fillText(localizeItemName(h.itemId, h.name, locale), cols.name, cy);
+
+    const pColor = pityColor(h.pity, stat.smallPityMax, pal);
+    ctx.font = `400 ${fs(13)}px ${fontMono}`;
+    ctx.fillStyle = pColor;
+    ctx.fillText(h.isFree ? tr.freeText : `${h.pity} ${tr.pullsUnit}`, cols.pity, cy);
+
+    ctx.font = `700 ${fs(12)}px ${fontMono}`;
+    ctx.fillText(
+      h.isFree ? "[FREE_PULL]" : renderAsciiBar(h.pity, stat.smallPityMax, 12),
+      cols.bar,
+      cy,
+    );
+
+    let tx = cols.tags;
+    const drawTag = (text: string, color: string) => {
+      ctx.font = `700 ${fs(11)}px ${fontMono}`;
+      const tw = ctx.measureText(text).width + 10;
+      const th = Math.round(19 * fontScale);
+      ctx.strokeStyle = color;
+      ctx.strokeRect(tx + 0.5, cy - th / 2 + 0.5, tw, th);
+      ctx.fillStyle = color;
+      ctx.fillText(text, tx + 5, cy);
+      tx += tw + 6;
+    };
+    if (h.hasUpInfo) drawTag(h.isUp ? "UP" : tr.tagOff, h.isUp ? pal.green : pal.red);
+    if (h.isNew) drawTag("NEW", pal.gold);
+    if (h.isFree) drawTag(tr.tagFree, pal.cyan);
+
+    ctx.font = `400 ${fs(12)}px ${fontMono}`;
+    ctx.fillStyle = pal.muted;
+    const poolAndTime = showPool
+      ? `${localizePoolName(h.poolId, h.poolName, locale) || "-"} // ${formatDate(h.gachaTs)}`
+      : formatDate(h.gachaTs);
+    ctx.fillText(poolAndTime, cols.poolTime, cy);
+  };
 
   let rowY = thY + thH + 4;
   if (history.length === 0) {
     ctx.font = `400 ${fs(13)}px ${fontMono}`;
     ctx.fillStyle = pal.muted;
     ctx.fillText(tr.noHistoryMatch, cols.idx, rowY + rowH / 2);
-  } else {
-    history.forEach((h, idx) => {
-      const cy = rowY + rowH / 2;
-      if (idx % 2 === 1) {
-        ctx.fillStyle = pal.elevated;
-        ctx.fillRect(padX + 14, rowY, innerW - 28, rowH);
-      }
-
-      ctx.font = `400 ${fs(12)}px ${fontMono}`;
-      ctx.fillStyle = pal.muted;
-      ctx.fillText(String(idx + 1), cols.idx, cy);
-
-      ctx.font = `700 ${fs(13)}px ${fontMono}`;
-      ctx.fillStyle = pal.gold;
-      ctx.fillText(localizeItemName(h.itemId, h.name, locale), cols.name, cy);
-
-      const pColor = pityColor(h.pity, stat.smallPityMax, pal);
-      ctx.font = `400 ${fs(13)}px ${fontMono}`;
-      ctx.fillStyle = pColor;
-      ctx.fillText(h.isFree ? tr.freeText : `${h.pity} ${tr.pullsUnit}`, cols.pity, cy);
+  } else if (useGrouped && poolGroups.length > 0) {
+    for (const g of poolGroups) {
+      const boxH = groupHeaderH + g.items.length * rowH + 8;
+      ctx.strokeStyle = pal.border;
+      ctx.strokeRect(padX + 14.5, rowY + 0.5, innerW - 29, boxH - 1);
 
       ctx.font = `700 ${fs(12)}px ${fontMono}`;
-      ctx.fillText(h.isFree ? "[FREE_PULL]" : renderAsciiBar(h.pity, stat.smallPityMax, 12), cols.bar, cy);
+      ctx.fillStyle = pal.cyan;
+      ctx.fillText(`┌─ ${g.title} (${g.items.length})`, padX + 24, rowY + groupHeaderH / 2);
 
-      let tx = cols.tags;
-      const drawTag = (text: string, color: string) => {
-        ctx.font = `700 ${fs(11)}px ${fontMono}`;
-        const tw = ctx.measureText(text).width + 10;
-        const th = Math.round(19 * fontScale);
-        ctx.strokeStyle = color;
-        ctx.strokeRect(tx + 0.5, cy - th / 2 + 0.5, tw, th);
-        ctx.fillStyle = color;
-        ctx.fillText(text, tx + 5, cy);
-        tx += tw + 6;
-      };
-      if (h.hasUpInfo) drawTag(h.isUp ? "UP" : tr.tagOff, h.isUp ? pal.green : pal.red);
-      if (h.isNew) drawTag("NEW", pal.gold);
-      if (h.isFree) drawTag(tr.tagFree, pal.cyan);
-
-      ctx.font = `400 ${fs(12)}px ${fontMono}`;
-      ctx.fillStyle = pal.muted;
-      ctx.fillText(
-        `${localizePoolName(h.poolId, h.poolName, locale) || "-"} // ${formatDate(h.gachaTs)}`,
-        cols.poolTime,
-        cy,
-      );
-
+      let gy = rowY + groupHeaderH;
+      g.items.forEach(({ item, num }, idx) => {
+        drawHistoryRow(item, num, idx, gy, padX + 16, innerW - 32, false);
+        gy += rowH;
+      });
+      rowY += boxH + groupGap;
+    }
+  } else {
+    history.forEach((h, idx) => {
+      drawHistoryRow(h, idx + 1, idx, rowY, padX + 14, innerW - 28, true);
       rowY += rowH;
     });
   }

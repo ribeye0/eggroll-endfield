@@ -65,6 +65,7 @@ import {
   type Locale,
 } from "./i18n";
 import { localizeItemName, localizePoolName } from "./itemI18n";
+import { applyCachedCatalog, refreshRemoteCatalog } from "./remoteCatalog";
 import { DEMO_ACCOUNT, DEMO_POOL_INFO, DEMO_RECORDS } from "./demoData";
 
 type MainTab = "char" | "weapon" | "import";
@@ -93,7 +94,7 @@ const state = {
   historyFilter: "all" as HistoryFilter,
   historyPage: 1,
   busy: false,
-  statusText: "就緒 // 純文字 TUI 模式 (國際服 Gryphline)",
+  statusText: "就緒",
   statusError: false,
   logProvider: "gryphline" as Provider,
   customLogPath: "",
@@ -106,6 +107,8 @@ const state = {
   imgWidth: 1080 as ImageWidth,
   imgFontScale: 1 as FontScale,
   imgHistoryLimit: 10 as number | "all",
+  imgGroupByPool: true,
+  imgPoolLimit: 5 as number | "all",
 };
 
 const MIN_ZOOM = 0.8;
@@ -273,23 +276,49 @@ function buildCharPoolEntries(records: AccountRecords): PoolEntry[] {
     }
   }
 
-  for (const s of jointStats) {
+  if (jointStats.length > 0) {
     entries.push({
-      id: `char:joint:${s.poolId || s.poolName}`,
+      id: "char:joint:all",
       group: tr.groupJoint,
-      label: localizePoolName(s.poolId, s.poolName, locale),
-      stat: s,
+      label: tr.allJointLabel,
+      stat: mergeAllPoolStats(tr.allJointTitle, JOINT_POOL_KEY, jointStats),
     });
+    for (const s of jointStats) {
+      entries.push({
+        id: `char:joint:${s.poolId || s.poolName}`,
+        group: tr.groupJoint,
+        label: localizePoolName(s.poolId, s.poolName, locale),
+        stat: s,
+      });
+    }
   }
 
+  const simpleStats: Array<{ key: string; stat: GachaStatistics }> = [];
   for (const key of [STANDARD_POOL_KEY, BEGINNER_POOL_KEY]) {
     const raw = records.char[key] || [];
     if (raw.length > 0 || entries.length === 0) {
+      simpleStats.push({ key, stat: analyzeSimpleCharPool(key, raw) });
+    }
+  }
+  if (simpleStats.length > 0) {
+    if (simpleStats.length > 1) {
+      entries.push({
+        id: "char:simple:all",
+        group: tr.groupStandard,
+        label: tr.allStandardLabel,
+        stat: mergeAllPoolStats(
+          tr.allStandardTitle,
+          "standard_all",
+          simpleStats.map((x) => x.stat),
+        ),
+      });
+    }
+    for (const { key, stat } of simpleStats) {
       entries.push({
         id: `char:simple:${key}`,
         group: tr.groupStandard,
         label: localizePoolName(key, POOL_NAME_MAP[key] || key, locale),
-        stat: analyzeSimpleCharPool(key, raw),
+        stat,
       });
     }
   }
@@ -576,39 +605,118 @@ function renderStatsView(entries: PoolEntry[]): string {
   const displayedHistory =
     limit === "all" ? sortedHistory : sortedHistory.slice(startIdx, startIdx + pageSize);
 
-  const rowsHtml =
-    displayedHistory.length === 0
-      ? `<tr><td colspan="6" class="c-muted" style="text-align:center; padding: 18px;">${escapeHtml(tr.noHistoryMatch)}</td></tr>`
-      : displayedHistory
-          .map((h, idx) => {
-            const pCls = pityColorClass(h.pity, s.smallPityMax);
-            const bar = h.isFree ? "[FREE_PULL]" : renderAsciiBar(h.pity, s.smallPityMax, 12);
-            const tags: string[] = [];
-            if (h.hasUpInfo) {
-              tags.push(
-                h.isUp
-                  ? `<span class="tag c-green">UP</span>`
-                  : `<span class="tag c-red">${escapeHtml(tr.tagOff)}</span>`,
-              );
-            }
-            if (h.isNew) tags.push(`<span class="tag c-gold">NEW</span>`);
-            if (h.isFree) tags.push(`<span class="tag c-cyan">${escapeHtml(tr.tagFree)}</span>`);
+  const isOverview = isOverviewStat(s);
 
-            return `
-              <tr>
-                <td class="c-muted">${startIdx + idx + 1}</td>
-                <td class="c-gold"><strong>${escapeHtml(localizeItemName(h.itemId, h.name, locale))}</strong></td>
-                <td class="${pCls}">${h.isFree ? escapeHtml(tr.freeText) : `${h.pity} ${escapeHtml(tr.pullsUnit)}`}</td>
-                <td class="ascii-bar ${pCls}">${bar}</td>
-                <td>${tags.join("") || `<span class="c-muted">-</span>`}</td>
-                <td class="c-muted">${escapeHtml(localizePoolName(h.poolId, h.poolName, locale) || "-")} // ${escapeHtml(formatTs(h.gachaTs))}</td>
-              </tr>
-            `;
-          })
-          .join("");
+  const renderHistoryRow = (h: (typeof displayedHistory)[number], rowNum: number, showPool: boolean) => {
+    const pCls = pityColorClass(h.pity, s.smallPityMax);
+    const bar = h.isFree ? "[FREE_PULL]" : renderAsciiBar(h.pity, s.smallPityMax, 12);
+    const tags: string[] = [];
+    if (h.hasUpInfo) {
+      tags.push(
+        h.isUp
+          ? `<span class="tag c-green">UP</span>`
+          : `<span class="tag c-red">${escapeHtml(tr.tagOff)}</span>`,
+      );
+    }
+    if (h.isNew) tags.push(`<span class="tag c-gold">NEW</span>`);
+    if (h.isFree) tags.push(`<span class="tag c-cyan">${escapeHtml(tr.tagFree)}</span>`);
+    const poolAndTime = showPool
+      ? `${localizePoolName(h.poolId, h.poolName, locale) || "-"} // ${formatTs(h.gachaTs)}`
+      : formatTs(h.gachaTs);
+
+    return `
+      <tr>
+        <td class="c-muted">${rowNum}</td>
+        <td class="c-gold"><strong>${escapeHtml(localizeItemName(h.itemId, h.name, locale))}</strong></td>
+        <td class="${pCls}">${h.isFree ? escapeHtml(tr.freeText) : `${h.pity} ${escapeHtml(tr.pullsUnit)}`}</td>
+        <td class="ascii-bar ${pCls}">${bar}</td>
+        <td>${tags.join("") || `<span class="c-muted">-</span>`}</td>
+        <td class="c-muted">${escapeHtml(poolAndTime)}</td>
+      </tr>
+    `;
+  };
 
   const sortArrow = (field: SortField) =>
     state.sortField === field ? (state.sortDir === "desc" ? " ▼" : " ▲") : "";
+
+  let historyContentHtml = "";
+  if (displayedHistory.length === 0) {
+    historyContentHtml = `
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>${escapeHtml(tr.colName)}</th>
+            <th class="sortable" data-sort="pity">${escapeHtml(tr.colPulls)}${sortArrow("pity")}</th>
+            <th>${escapeHtml(tr.colBar)}</th>
+            <th>${escapeHtml(tr.colTags)}</th>
+            <th class="sortable" data-sort="time">${escapeHtml(tr.colPoolTime)}${sortArrow("time")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="6" class="c-muted" style="text-align:center; padding: 18px;">${escapeHtml(tr.noHistoryMatch)}</td></tr>
+        </tbody>
+      </table>
+    `;
+  } else if (isOverview) {
+    const poolGroups = new Map<
+      string,
+      { title: string; items: Array<{ item: (typeof displayedHistory)[number]; num: number }> }
+    >();
+    displayedHistory.forEach((h, idx) => {
+      const key = h.poolId || h.poolName || "-";
+      const title = localizePoolName(h.poolId, h.poolName, locale) || "-";
+      if (!poolGroups.has(key)) poolGroups.set(key, { title, items: [] });
+      poolGroups.get(key)!.items.push({ item: h, num: startIdx + idx + 1 });
+    });
+
+    historyContentHtml = `
+      <div class="pool-history-groups">
+        ${Array.from(poolGroups.values())
+          .map(
+            (g) => `
+              <fieldset class="tui-panel pool-history-box">
+                <legend class="tui-legend">${escapeHtml(g.title)} (${g.items.length})</legend>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>${escapeHtml(tr.colName)}</th>
+                      <th class="sortable" data-sort="pity">${escapeHtml(tr.colPulls)}${sortArrow("pity")}</th>
+                      <th>${escapeHtml(tr.colBar)}</th>
+                      <th>${escapeHtml(tr.colTags)}</th>
+                      <th class="sortable" data-sort="time">${escapeHtml(tr.sortTime)}${sortArrow("time")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${g.items.map(({ item, num }) => renderHistoryRow(item, num, false)).join("")}
+                  </tbody>
+                </table>
+              </fieldset>
+            `,
+          )
+          .join("")}
+      </div>
+    `;
+  } else {
+    historyContentHtml = `
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>${escapeHtml(tr.colName)}</th>
+            <th class="sortable" data-sort="pity">${escapeHtml(tr.colPulls)}${sortArrow("pity")}</th>
+            <th>${escapeHtml(tr.colBar)}</th>
+            <th>${escapeHtml(tr.colTags)}</th>
+            <th class="sortable" data-sort="time">${escapeHtml(tr.colPoolTime)}${sortArrow("time")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${displayedHistory.map((h, idx) => renderHistoryRow(h, startIdx + idx + 1, true)).join("")}
+        </tbody>
+      </table>
+    `;
+  }
 
   const historyTitle = tr.historyTitle(displayedHistory.length, sortedHistory.length);
   const customLimitVal = limit === "all" ? "" : String(limit);
@@ -687,21 +795,7 @@ function renderStatsView(entries: PoolEntry[]): string {
             </div>
           </div>
           <div class="tui-panel-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>${escapeHtml(tr.colName)}</th>
-                  <th class="sortable" data-sort="pity">${escapeHtml(tr.colPulls)}${sortArrow("pity")}</th>
-                  <th>${escapeHtml(tr.colBar)}</th>
-                  <th>${escapeHtml(tr.colTags)}</th>
-                  <th class="sortable" data-sort="time">${escapeHtml(tr.colPoolTime)}${sortArrow("time")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rowsHtml}
-              </tbody>
-            </table>
+            ${historyContentHtml}
           </div>
         </fieldset>
       </div>
@@ -793,9 +887,21 @@ function renderStatusBar(): string {
   `;
 }
 
+function isOverviewStat(s: GachaStatistics): boolean {
+  return !!s.subPities || !s.poolId;
+}
+
 function renderImageModal(): string {
   if (!state.imgModalOpen) return "";
   const tr = getTr();
+  const entries =
+    state.tab === "weapon"
+      ? buildWeaponPoolEntries(getActiveRecords())
+      : buildCharPoolEntries(getActiveRecords());
+  const selected = entries.find((e) => e.id === state.selectedPoolId) || entries[0];
+  const isOverview = selected ? isOverviewStat(selected.stat) : false;
+  const showPoolLimit = isOverview && state.imgGroupByPool;
+
   return `
     <div class="modal-backdrop" id="img-modal-backdrop">
       <fieldset class="tui-panel modal-box">
@@ -828,6 +934,29 @@ function renderImageModal(): string {
             <button class="${state.imgScale === 3 ? "active" : ""}" data-img-scale="3">3x</button>
             <span class="c-muted">${escapeHtml(tr.imgOutWidth(state.imgWidth * state.imgScale))}</span>
           </div>
+          ${
+            isOverview
+              ? `
+          <div class="row">
+            <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgGroupMode)}</span>
+            <button class="${state.imgGroupByPool ? "active" : ""}" data-img-group="grouped">${escapeHtml(tr.imgGroupByPool)}</button>
+            <button class="${!state.imgGroupByPool ? "active" : ""}" data-img-group="flat">${escapeHtml(tr.imgFlatList)}</button>
+          </div>
+          `
+              : ""
+          }
+          ${
+            showPoolLimit
+              ? `
+          <div class="row">
+            <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgPoolCount)}</span>
+            <button class="${state.imgPoolLimit === 3 ? "active" : ""}" data-img-pool-limit="3">3</button>
+            <button class="${state.imgPoolLimit === 5 ? "active" : ""}" data-img-pool-limit="5">5</button>
+            <button class="${state.imgPoolLimit === 10 ? "active" : ""}" data-img-pool-limit="10">10</button>
+            <button class="${state.imgPoolLimit === "all" ? "active" : ""}" data-img-pool-limit="all">${escapeHtml(tr.allOpt)}</button>
+          </div>
+          `
+              : `
           <div class="row">
             <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgCount)}</span>
             <button class="${state.imgHistoryLimit === 10 ? "active" : ""}" data-img-limit="10">10</button>
@@ -835,6 +964,8 @@ function renderImageModal(): string {
             <button class="${state.imgHistoryLimit === 50 ? "active" : ""}" data-img-limit="50">50</button>
             <button class="${state.imgHistoryLimit === "all" ? "active" : ""}" data-img-limit="all">${escapeHtml(tr.allOpt)}</button>
           </div>
+          `
+          }
           <div class="row" style="justify-content:flex-end; margin-top:6px;">
             <button id="btn-img-cancel">${escapeHtml(tr.cancelBtn)}</button>
             <button id="btn-img-confirm" class="active">${escapeHtml(tr.confirmExportBtn)}</button>
@@ -873,13 +1004,14 @@ function render(): void {
 
 async function runSyncWithInput(rawInput: string, fallbackProv: Provider, fallbackSid: string) {
   const tr = getTr();
+  const locale = state.store.locale || "zh-TW";
   state.busy = true;
   setStatus(tr.statusParsing);
   render();
 
   try {
-    const parsed = parseGachaUrlOrToken(rawInput, fallbackProv, fallbackSid);
-    const acc = await queryAccountFromToken(parsed);
+    const parsed = parseGachaUrlOrToken(rawInput, fallbackProv, fallbackSid, locale);
+    const acc = await queryAccountFromToken(parsed, locale);
     const idx = state.store.accounts.findIndex((a) => a.key === acc.key);
     if (idx >= 0) state.store.accounts[idx] = acc;
     else state.store.accounts.push(acc);
@@ -893,7 +1025,8 @@ async function runSyncWithInput(rawInput: string, fallbackProv: Provider, fallba
       (msg) => {
         setStatus(msg);
       },
-      getApiLang(state.store.locale || "zh-TW"),
+      getApiLang(locale),
+      locale,
     );
 
     state.store.records[acc.key] = result.records;
@@ -1022,6 +1155,21 @@ function bindEvents(): void {
     });
   });
 
+  document.querySelectorAll<HTMLElement>("[data-img-group]").forEach((el) => {
+    el.addEventListener("click", () => {
+      state.imgGroupByPool = el.dataset.imgGroup !== "flat";
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>("[data-img-pool-limit]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const val = el.dataset.imgPoolLimit;
+      state.imgPoolLimit = val === "all" ? "all" : Math.max(1, Number(val) || 5);
+      render();
+    });
+  });
+
   document.getElementById("btn-img-confirm")?.addEventListener("click", async () => {
     const acc = getActiveAccount();
     if (!acc) return;
@@ -1054,6 +1202,8 @@ function bindEvents(): void {
         logicalWidth: state.imgWidth,
         fontScale: state.imgFontScale,
         historyLimit: state.imgHistoryLimit,
+        groupByPool: state.imgGroupByPool,
+        poolLimit: state.imgPoolLimit,
       });
       const ext = state.imgFormat === "jpeg" ? "jpg" : state.imgFormat;
       const filename = `eggroll-${state.tab}-${state.imgScale}x-${formatFileTimestamp()}.${ext}`;
@@ -1164,7 +1314,7 @@ function bindEvents(): void {
     setStatus(tr.statusReadingLog);
     render();
     try {
-      const res = await detectGachaLog("gryphline", state.customLogPath);
+      const res = await detectGachaLog("gryphline", state.customLogPath, state.store.locale || "zh-TW");
       state.urlInput = res.url;
       await runSyncWithInput(res.url, res.provider, "auto");
     } catch (err: any) {
@@ -1191,7 +1341,7 @@ function bindEvents(): void {
       const parsed = JSON.parse(text);
 
       if (isAkegfDocument(parsed)) {
-        const bundles = importFromAkegf(parsed);
+        const bundles = importFromAkegf(parsed, state.store.locale || "zh-TW");
         for (const { account, records } of bundles) {
           const idx = state.store.accounts.findIndex((a) => a.key === account.key);
           if (idx >= 0) state.store.accounts[idx] = { ...state.store.accounts[idx], ...account };
@@ -1266,6 +1416,11 @@ document.addEventListener("copy", (e) => {
 });
 
 window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.imgModalOpen) {
+    state.imgModalOpen = false;
+    render();
+    return;
+  }
   const tag = (e.target as HTMLElement)?.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
   if (e.key === "1") {
@@ -1292,13 +1447,48 @@ window.addEventListener("keydown", (e) => {
   } else if (e.key === "0") {
     e.preventDefault();
     void changeZoom("reset");
+  } else if (!state.imgModalOpen && (state.tab === "char" || state.tab === "weapon")) {
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      const entries =
+        state.tab === "weapon"
+          ? buildWeaponPoolEntries(getActiveRecords())
+          : buildCharPoolEntries(getActiveRecords());
+      if (entries.length === 0) return;
+      e.preventDefault();
+      const idx = entries.findIndex((item) => item.id === state.selectedPoolId);
+      const cur = idx >= 0 ? idx : 0;
+      const nextIdx =
+        e.key === "ArrowUp"
+          ? (cur - 1 + entries.length) % entries.length
+          : (cur + 1) % entries.length;
+      state.selectedPoolId = entries[nextIdx]!.id;
+      state.historyPage = 1;
+      render();
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      if (e.key === "ArrowLeft" && state.historyPage > 1) {
+        state.historyPage--;
+        render();
+      } else if (e.key === "ArrowRight") {
+        state.historyPage++;
+        render();
+      }
+    }
   }
 });
 
 async function bootstrap() {
   state.store = await loadAppStore();
+  applyCachedCatalog(state.store);
   setStatus(getTr().statusReady);
   render();
+
+  void refreshRemoteCatalog(state.store).then(async (updated) => {
+    if (updated) {
+      await saveAppStore(state.store);
+      render();
+    }
+  });
 }
 
 bootstrap();

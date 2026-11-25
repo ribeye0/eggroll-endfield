@@ -172,6 +172,31 @@ const ITEM_REVERSE_MAP = buildReverseMap(ITEM_NAME_I18N);
 const POOL_REVERSE_MAP = buildReverseMap(POOL_NAME_I18N);
 
 /**
+ * Merge remotely fetched or cached 5-language name mappings into runtime lookup tables.
+ */
+export function mergeDynamicI18nCatalog(
+  items?: Record<string, LocalizedNames>,
+  pools?: Record<string, LocalizedNames>,
+): void {
+  if (items) {
+    for (const [id, names] of Object.entries(items)) {
+      ITEM_NAME_I18N[id] = { ...(ITEM_NAME_I18N[id] || {}), ...names };
+      for (const val of Object.values(ITEM_NAME_I18N[id]!)) {
+        if (val) ITEM_REVERSE_MAP.set(val, ITEM_NAME_I18N[id]!);
+      }
+    }
+  }
+  if (pools) {
+    for (const [id, names] of Object.entries(pools)) {
+      POOL_NAME_I18N[id] = { ...(POOL_NAME_I18N[id] || {}), ...names };
+      for (const val of Object.values(POOL_NAME_I18N[id]!)) {
+        if (val) POOL_REVERSE_MAP.set(val, POOL_NAME_I18N[id]!);
+      }
+    }
+  }
+}
+
+/**
  * Resolve a character or weapon display name in the target locale.
  * Priority: exact ID lookup -> reverse lookup by stored name -> original fallback.
  */

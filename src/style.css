@@ -687,6 +687,16 @@ tbody tr:hover {
   flex-shrink: 0;
 }
 
+.pool-history-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pool-history-box {
+  padding: 6px 10px 8px;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

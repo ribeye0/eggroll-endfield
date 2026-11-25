@@ -20,6 +20,7 @@ import {
   WEAPON_RERUN_POOL_TYPE,
 } from "./gachaCalc";
 import { DEFAULT_POOL_INFO } from "./defaultPoolInfo";
+import { TRANSLATIONS, type Locale } from "./i18n";
 
 const LOCAL_STORAGE_FALLBACK_KEY = "endfield_gacha_tui_store_v1";
 
@@ -203,9 +204,10 @@ export async function saveAppStore(store: AppStore): Promise<void> {
 export async function detectGachaLog(
   provider?: Provider,
   customPath?: string,
+  locale: Locale = "zh-TW",
 ): Promise<LogDetectionResult> {
   if (!isTauriEnv()) {
-    throw new Error("瀏覽器預覽模式無法讀取本機檔案，請使用 Tauri 桌面版或直接貼上抽卡連結。");
+    throw new Error(TRANSLATIONS[locale].errBrowserLog);
   }
   return invoke<LogDetectionResult>("detect_gacha_log", {
     provider: provider ?? null,
@@ -245,15 +247,17 @@ export function parseGachaUrlOrToken(
   input: string,
   fallbackProvider: Provider = "gryphline",
   fallbackServerId = "auto",
+  locale: Locale = "zh-TW",
 ): ParsedGachaInput {
+  const tr = TRANSLATIONS[locale];
   const trimmed = input.trim();
-  if (!trimmed) throw new Error("請輸入抽卡連結或 u8_token。");
+  if (!trimmed) throw new Error(tr.errEmptyInput);
 
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
     const url = new URL(trimmed);
     const params = url.searchParams;
     const u8Token = params.get("u8_token") || params.get("token") || "";
-    if (!u8Token) throw new Error("連結中找不到 u8_token 參數。");
+    if (!u8Token) throw new Error(tr.errMissingTokenParam);
 
     const provider: Provider = url.hostname.includes("hypergryph.com")
       ? "hypergryph"
@@ -276,14 +280,16 @@ export function parseGachaUrlOrToken(
 
 export async function queryAccountFromToken(
   parsed: ParsedGachaInput,
+  locale: Locale = "zh-TW",
 ): Promise<AccountInfo> {
+  const tr = TRANSLATIONS[locale];
   const url = `https://u8.${parsed.provider}.com/game/role/v1/query_role_list`;
   const candidates =
     parsed.serverId && parsed.serverId !== "auto"
       ? Array.from(new Set([parsed.serverId, "2", "3", "4"]))
       : ["2", "3", "4"];
 
-  let lastError = "角色查詢失敗";
+  let lastError: string = tr.errTokenExpired;
   let json: any = null;
   let usedServerId = candidates[0]!;
 
@@ -298,14 +304,14 @@ export async function queryAccountFromToken(
         usedServerId = sid;
         break;
       }
-      lastError = res?.msg || "token 可能已過期";
+      lastError = res?.msg || tr.errTokenExpired;
     } catch (e: any) {
       lastError = e?.message || String(e);
     }
   }
 
   if (!json) {
-    throw new Error(`角色查詢失敗: ${lastError}`);
+    throw new Error(tr.errRoleQuery(lastError));
   }
 
   const uid = String(json?.data?.uid ?? "").trim();
@@ -314,7 +320,7 @@ export async function queryAccountFromToken(
     roles.find((r: any) => String(r?.serverId ?? "") === String(usedServerId)) ||
     roles[0];
   const roleId = String(role?.roleId ?? "").trim();
-  if (!uid || !roleId) throw new Error("無法取得 UID 或 RoleID。");
+  if (!uid || !roleId) throw new Error(tr.errMissingUidRole);
 
   const resolvedServerId = String(role?.serverId ?? usedServerId);
   const regionPrefix = parsed.provider === "hypergryph" ? "cn" : "global";
@@ -375,6 +381,7 @@ async function fetchPaginated<T extends { seqId: string }>(
   stopSeqId: string,
   lang: string,
   onPage: (page: number) => void,
+  locale: Locale = "zh-TW",
 ): Promise<T[]> {
   const out: T[] = [];
   let nextSeqId = "";
@@ -394,7 +401,7 @@ async function fetchPaginated<T extends { seqId: string }>(
 
     const json = await httpGetJson<any>(`${baseUrl}?${query.toString()}`);
     if (json?.code !== 0 || !Array.isArray(json?.data?.list)) {
-      throw new Error(`API 回應異常: code=${json?.code} msg=${json?.msg || ""}`);
+      throw new Error(TRANSLATIONS[locale].errApiResponse(json?.code, json?.msg || ""));
     }
 
     const list = json.data.list as T[];
@@ -509,14 +516,16 @@ export async function syncAccountGacha(
   poolInfo: Record<string, PoolInfoEntry>,
   onProgress: (msg: string) => void,
   preferredLang?: string,
+  locale: Locale = "zh-TW",
 ): Promise<{
   records: AccountRecords;
   poolInfo: Record<string, PoolInfoEntry>;
   addedChar: number;
   addedWeapon: number;
 }> {
+  const tr = TRANSLATIONS[locale];
   const token = account.u8Token;
-  if (!token) throw new Error("此帳號尚未設定 u8_token，請先匯入抽卡連結或讀取遊戲日誌。");
+  if (!token) throw new Error(tr.errNoAccountToken);
 
   const provider = account.provider;
   const serverId = account.serverId || "1";
@@ -537,7 +546,7 @@ export async function syncAccountGacha(
 
   // 1. Character pools
   for (const poolType of CHAR_POOL_TYPES) {
-    onProgress(`同步角色池: ${poolType} ...`);
+    onProgress(tr.progSyncChar(poolType));
     const list = await fetchPaginated<CharRecord>(
       `https://ef-webview.${provider}.com/api/record/char`,
       token,
@@ -545,7 +554,8 @@ export async function syncAccountGacha(
       { pool_type: poolType },
       charStopSeq,
       lang,
-      (p) => onProgress(`同步角色池 ${poolType} (第 ${p} 頁)...`),
+      (p) => onProgress(tr.progSyncChar(poolType, p)),
+      locale,
     );
     const { merged, added } = mergeRecordsBySeqId(nextRecords.char[poolType] || [], list);
     nextRecords.char[poolType] = merged;
@@ -572,7 +582,7 @@ export async function syncAccountGacha(
   }
 
   // 2. Weapon pools
-  onProgress("取得武器池列表...");
+  onProgress(tr.progFetchWeapons);
   const weaponRerun = await fetchRerunCounts("weapon", provider, token, serverId, lang);
   if (Object.keys(weaponRerun).length > 0) {
     nextRecords.weaponRerunCounts = { ...nextRecords.weaponRerunCounts, ...weaponRerun };
@@ -597,7 +607,8 @@ export async function syncAccountGacha(
     }
 
     for (const p of normalPools) {
-      onProgress(`同步武器池: ${p.poolName || p.poolId} ...`);
+      const displayPool = p.poolName || p.poolId;
+      onProgress(tr.progSyncWeapon(displayPool));
       if (!nextPoolInfo[p.poolId]?.up6_id) {
         const info = await fetchPoolContent(provider, serverId, p.poolId, lang);
         if (info) nextPoolInfo[p.poolId] = info;
@@ -609,7 +620,8 @@ export async function syncAccountGacha(
         { pool_id: p.poolId },
         weaponStopSeq,
         lang,
-        (pg) => onProgress(`同步武器池 ${p.poolName || p.poolId} (第 ${pg} 頁)...`),
+        (pg) => onProgress(tr.progSyncWeapon(displayPool, pg)),
+        locale,
       );
       const { merged, added } = mergeRecordsBySeqId(nextRecords.weapon[p.poolId] || [], list);
       nextRecords.weapon[p.poolId] = merged;
@@ -617,7 +629,7 @@ export async function syncAccountGacha(
     }
 
     if (rerunIds.length > 0) {
-      onProgress("同步武器重構申領...");
+      onProgress(tr.progSyncWeaponRerun());
       const list = await fetchPaginated<WeaponRecord>(
         `https://ef-webview.${provider}.com/api/record/weapon`,
         token,
@@ -625,7 +637,8 @@ export async function syncAccountGacha(
         { pool_ids: rerunIds.join(",") },
         weaponStopSeq,
         lang,
-        (pg) => onProgress(`同步武器重構申領 (第 ${pg} 頁)...`),
+        (pg) => onProgress(tr.progSyncWeaponRerun(pg)),
+        locale,
       );
       const grouped: Record<string, WeaponRecord[]> = {};
       for (const pid of rerunIds) grouped[pid] = [];
