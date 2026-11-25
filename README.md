@@ -1,4 +1,4 @@
-# Simple Endfield Pull Tracker (SEPT)
+# EggRoll // Endfield Pull Tracker
 
 極簡、純文字 TUI 風格但支援滑鼠操作的《明日方舟：終末地》本地抽卡分析工具（國際服 Gryphline）。
 

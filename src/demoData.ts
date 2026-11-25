@@ -5,7 +5,7 @@ export const DEMO_ACCOUNT: AccountInfo = {
   key: "demo_0000000001",
   uid: "0000000001",
   roleId: "0000000001",
-  nickName: "管理員老先生",
+  nickName: "endmin_demo",
   serverId: "2",
   serverName: "Asia",
   provider: "gryphline",

@@ -72,7 +72,7 @@ body {
   height: 100%;
   background: var(--bg);
   color: var(--fg);
-  font-family: "Hack", "Noto Sans TC", "Noto Sans SC", "Noto Sans JP", monospace;
+  font-family: "Hack", "Noto Sans TC", "Noto Sans SC", "Noto Sans JP", "Noto Sans KR", monospace;
   font-size: 16px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -82,11 +82,15 @@ body {
 
 :lang(zh-Hans),
 :lang(zh-CN) {
-  font-family: "Hack", "Noto Sans SC", "Noto Sans TC", "Noto Sans JP", monospace;
+  font-family: "Hack", "Noto Sans SC", "Noto Sans TC", "Noto Sans JP", "Noto Sans KR", monospace;
 }
 
 :lang(ja) {
-  font-family: "Hack", "Noto Sans JP", "Noto Sans TC", "Noto Sans SC", monospace;
+  font-family: "Hack", "Noto Sans JP", "Noto Sans TC", "Noto Sans SC", "Noto Sans KR", monospace;
+}
+
+:lang(ko) {
+  font-family: "Hack", "Noto Sans KR", "Noto Sans TC", "Noto Sans SC", "Noto Sans JP", monospace;
 }
 
 #app {
@@ -136,6 +140,29 @@ button.active {
   border-color: var(--accent);
   color: var(--accent);
   font-weight: 700;
+}
+
+button.btn-sync {
+  background: rgba(88, 199, 243, 0.18);
+  border-color: var(--cyan);
+  color: var(--cyan);
+  font-weight: 700;
+}
+
+button.btn-sync:hover:not(:disabled) {
+  background: rgba(88, 199, 243, 0.3);
+  border-color: var(--cyan);
+}
+
+[data-theme="light"] button.btn-sync {
+  background: #0369a1;
+  border-color: #0369a1;
+  color: #ffffff;
+}
+
+[data-theme="light"] button.btn-sync:hover:not(:disabled) {
+  background: #075985;
+  border-color: #075985;
 }
 
 button.btn-export-img {

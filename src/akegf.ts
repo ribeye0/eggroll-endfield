@@ -82,12 +82,15 @@ function resolveCharPoolKey(poolType?: string, poolId?: string): string {
   ) {
     return pt;
   }
+  if (pt) {
+    return pt;
+  }
   const pid = String(poolId || "").toLowerCase();
   if (pid.startsWith("special")) return SPECIAL_POOL_KEY;
   if (pid.startsWith("rerun")) return RERUN_POOL_KEY;
-  if (pid.startsWith("joint")) return JOINT_POOL_KEY;
   if (pid.startsWith("beginner")) return BEGINNER_POOL_KEY;
-  return STANDARD_POOL_KEY;
+  if (!pid || pid.startsWith("standard")) return STANDARD_POOL_KEY;
+  return JOINT_POOL_KEY;
 }
 
 export function exportAccountToAkegf(
@@ -201,7 +204,7 @@ export function exportAccountToAkegf(
   return {
     info: {
       version: AKEGF_VERSION,
-      export_app: "Simple Endfield Pull Tracker",
+      export_app: "EggRoll",
       export_app_version: appVersion,
       export_timestamp: Date.now(),
     },

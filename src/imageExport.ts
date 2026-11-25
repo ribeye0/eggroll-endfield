@@ -9,6 +9,7 @@ import {
   WEAPON_RERUN_POOL_TYPE,
 } from "./gachaCalc";
 import { TRANSLATIONS, type Locale } from "./i18n";
+import { localizeItemName, localizePoolName } from "./itemI18n";
 
 export type ImageFormat = "png" | "jpeg" | "webp";
 export type UpscaleFactor = 1 | 2 | 3;
@@ -141,7 +142,7 @@ export async function renderStatsToImageBytes(params: {
   ctx.scale(scale, scale);
   ctx.textBaseline = "middle";
 
-  const fontMono = `"Hack", "Noto Sans TC", "Noto Sans SC", "Noto Sans JP", monospace`;
+  const fontMono = `"Hack", "Noto Sans TC", "Noto Sans SC", "Noto Sans JP", "Noto Sans KR", monospace`;
 
   ctx.fillStyle = pal.bg;
   ctx.fillRect(0, 0, logicalWidth, logicalH);
@@ -158,7 +159,7 @@ export async function renderStatsToImageBytes(params: {
 
   ctx.font = `700 ${fs(17)}px ${fontMono}`;
   ctx.fillStyle = pal.gold;
-  ctx.fillText("Simple Endfield Pull Tracker", padX + 16, y + headerH / 2);
+  ctx.fillText("EggRoll // Endfield Pull Tracker", padX + 16, y + headerH / 2);
 
   const hasCustomNick =
     account.nickName &&
@@ -182,21 +183,25 @@ export async function renderStatsToImageBytes(params: {
 
   ctx.font = `700 ${fs(14)}px ${fontMono}`;
   ctx.fillStyle = pal.cyan;
-  ctx.fillText(`┌─ ${stat.poolName}`, padX + 14, y + Math.round(20 * fontScale));
+  ctx.fillText(
+    `┌─ ${localizePoolName(stat.poolId, stat.poolName, locale)}`,
+    padX + 14,
+    y + Math.round(20 * fontScale),
+  );
 
   const kpiY = y + Math.round(38 * fontScale);
   const kpiGap = 8;
   const kpiW = (innerW - 28 - kpiGap * 5) / 6;
   const rate6 = stat.totalPulls > 0 ? ((stat.count6 / stat.totalPulls) * 100).toFixed(2) : "0.00";
-  const avgText = stat.avgPity6 !== null ? `${stat.avgPity6.toFixed(1)} 抽` : "-";
+  const avgText = stat.avgPity6 !== null ? `${stat.avgPity6.toFixed(1)} ${tr.pullsUnit}` : "-";
   const upRateText = stat.upWinRate !== null ? `${stat.upWinRate.toFixed(1)}%` : "-";
   const upChecksCount = stat.history6.filter((h) => h.hasUpInfo).length;
   const up6Count = stat.history6.filter((h) => h.hasUpInfo && h.isUp).length;
   const up6Text = upChecksCount > 0 ? `${up6Count}` : "-";
-  const up6Sub = upChecksCount > 0 ? `歪 ${upChecksCount - up6Count} 次` : "無 UP 池設定";
+  const up6Sub = upChecksCount > 0 ? tr.kpiOffSub(upChecksCount - up6Count) : tr.kpiNoUpPool;
   const limited6Count = stat.history6.filter((h) => isLimited6Star(h, poolInfo)).length;
   const limited6Sub =
-    stat.count6 > 0 ? `占 6★ ${((limited6Count / stat.count6) * 100).toFixed(0)}%` : "無 6★";
+    stat.count6 > 0 ? tr.kpiLimitedSub(((limited6Count / stat.count6) * 100).toFixed(0)) : tr.kpiNo6;
 
   const kpis = [
     { label: tr.kpiTotalPulls, value: `${stat.totalPulls}`, sub: tr.kpiTotalSub(stat.paidPulls, stat.freePulls), color: pal.fg },
@@ -237,7 +242,7 @@ export async function renderStatsToImageBytes(params: {
   if (hasSubPities) {
     ctx.font = `400 ${fs(13)}px ${fontMono}`;
     ctx.fillStyle = pal.muted;
-    ctx.fillText("各池小保底", padX + 16, pityY);
+    ctx.fillText(tr.subPities, padX + 16, pityY);
 
     const summaryLine = stat
       .subPities!.map((sp) => `${sp.label} ${sp.pity}/${sp.max}`)
@@ -248,7 +253,7 @@ export async function renderStatsToImageBytes(params: {
   } else {
     ctx.font = `400 ${fs(13)}px ${fontMono}`;
     ctx.fillStyle = pal.muted;
-    ctx.fillText("小保底水位", padX + 16, pityY);
+    ctx.fillText(tr.smallPity, padX + 16, pityY);
 
     ctx.font = `700 ${fs(13)}px ${fontMono}`;
     ctx.fillStyle = pityColor(stat.pityCount, stat.smallPityMax, pal);
@@ -257,17 +262,17 @@ export async function renderStatsToImageBytes(params: {
 
     ctx.font = `400 ${fs(13)}px ${fontMono}`;
     ctx.fillStyle = pal.fg;
-    ctx.fillText(`${stat.pityCount} / ${stat.smallPityMax} (距小保底 ${smallRem} 抽)`, barX + barMeasuredW + 14, pityY);
+    ctx.fillText(`${stat.pityCount} / ${stat.smallPityMax} ${tr.smallPityRem(smallRem)}`, barX + barMeasuredW + 14, pityY);
 
     if (hasBigPity) {
       const bpY = pityY + Math.round(28 * fontScale);
       ctx.font = `400 ${fs(13)}px ${fontMono}`;
       ctx.fillStyle = pal.muted;
-      ctx.fillText("大保底進度", padX + 16, bpY);
+      ctx.fillText(tr.bigPityProg, padX + 16, bpY);
       if (stat.gotUp6) {
         ctx.font = `700 ${fs(13)}px ${fontMono}`;
         ctx.fillStyle = pal.green;
-        ctx.fillText("[✓ 已取得當期 UP 6★]", barX, bpY);
+        ctx.fillText(tr.bigPityGot, barX, bpY);
       } else {
         const bc = stat.bigPityCount ?? 0;
         const bmax = stat.bigPityMax!;
@@ -278,7 +283,7 @@ export async function renderStatsToImageBytes(params: {
         ctx.fillText(bigBar, barX, bpY);
         ctx.font = `400 ${fs(13)}px ${fontMono}`;
         ctx.fillStyle = pal.fg;
-        ctx.fillText(`${bc} / ${bmax} (距大保底 ${brem} 抽)`, barX + barMeasuredW + 14, bpY);
+        ctx.fillText(`${bc} / ${bmax} ${tr.bigPityRem(brem)}`, barX + barMeasuredW + 14, bpY);
       }
     }
 
@@ -296,19 +301,34 @@ export async function renderStatsToImageBytes(params: {
 
       ctx.font = `400 ${fs(13)}px ${fontMono}`;
       ctx.fillStyle = pal.muted;
-      ctx.fillText("信物進度", padX + 16, tkY);
+      ctx.fillText(tr.tokenProg, padX + 16, tkY);
 
       ctx.font = `700 ${fs(13)}px ${fontMono}`;
       ctx.fillStyle = tokenEarned > 0 ? pal.green : pal.cyan;
       ctx.fillText(tokenBar, barX, tkY);
 
+      let tx = barX + barMeasuredW + 14;
+      const prefixStr = `${tokenProg} / ${tokenStep} `;
+      const remPart = `(${tr.tokenRemText(tokenRem)} | `;
+      const earnedPart = tr.tokenEarnedText(tokenEarned);
+
       ctx.font = `400 ${fs(13)}px ${fontMono}`;
       ctx.fillStyle = pal.fg;
-      ctx.fillText(
-        `${tokenProg} / ${tokenStep} (距下個信物 ${tokenRem} 抽 | 已獲 ${tokenEarned} 個)`,
-        barX + barMeasuredW + 14,
-        tkY,
-      );
+      ctx.fillText(prefixStr, tx, tkY);
+      tx += ctx.measureText(prefixStr).width;
+
+      ctx.fillStyle = pal.muted;
+      ctx.fillText(remPart, tx, tkY);
+      tx += ctx.measureText(remPart).width;
+
+      ctx.font = `${tokenEarned > 0 ? "700" : "400"} ${fs(13)}px ${fontMono}`;
+      ctx.fillStyle = tokenEarned > 0 ? pal.gold : pal.muted;
+      ctx.fillText(earnedPart, tx, tkY);
+      tx += ctx.measureText(earnedPart).width;
+
+      ctx.font = `400 ${fs(13)}px ${fontMono}`;
+      ctx.fillStyle = pal.muted;
+      ctx.fillText(")", tx, tkY);
     } else if (hasWeaponGiftProgress) {
       const wgY = pityY + Math.round((hasBigPity ? 56 : 28) * fontScale);
       const validPulls =
@@ -317,10 +337,11 @@ export async function renderStatsToImageBytes(params: {
           : stat.totalPulls;
       const wg = computeWeaponGiftMilestone(validPulls);
       const wgBar = renderAsciiBar(wg.prog, wg.span, barWidth);
+      const giftTargetLabel = wg.nextLabel === "補充武庫箱" ? tr.boxLabel : tr.upWeaponLabel;
 
       ctx.font = `400 ${fs(13)}px ${fontMono}`;
       ctx.fillStyle = pal.muted;
-      ctx.fillText("申領贈禮", padX + 16, wgY);
+      ctx.fillText(tr.weaponGift, padX + 16, wgY);
 
       ctx.font = `700 ${fs(13)}px ${fontMono}`;
       ctx.fillStyle = wg.weaponsEarned > 0 ? pal.green : pal.cyan;
@@ -329,7 +350,7 @@ export async function renderStatsToImageBytes(params: {
       ctx.font = `400 ${fs(13)}px ${fontMono}`;
       ctx.fillStyle = pal.fg;
       ctx.fillText(
-        `${wg.pulls} / ${wg.nextTarget} (距${wg.nextLabel} ${wg.remaining} 抽 | 已獲 箱×${wg.boxesEarned} / UP×${wg.weaponsEarned})`,
+        `${wg.pulls} / ${wg.nextTarget} ${tr.weaponGiftDesc(giftTargetLabel, wg.remaining, wg.boxesEarned, wg.weaponsEarned)}`,
         barX + barMeasuredW + 14,
         wgY,
       );
@@ -347,10 +368,7 @@ export async function renderStatsToImageBytes(params: {
 
   ctx.font = `700 ${fs(14)}px ${fontMono}`;
   ctx.fillStyle = pal.cyan;
-  const historyTitle =
-    history.length < allHistory.length
-      ? `┌─ 6★ 出貨紀錄 (顯示 ${history.length} / 共 ${allHistory.length} 筆)`
-      : `┌─ 6★ 出貨紀錄 (${allHistory.length})`;
+  const historyTitle = `┌─ ${tr.historyTitle(history.length, allHistory.length)}`;
   ctx.fillText(historyTitle, padX + 14, y + Math.round(20 * fontScale));
 
   const thY = y + tableTitleH;
@@ -373,17 +391,17 @@ export async function renderStatsToImageBytes(params: {
   ctx.font = `700 ${fs(12)}px ${fontMono}`;
   ctx.fillStyle = pal.muted;
   ctx.fillText("#", cols.idx, thY + thH / 2);
-  ctx.fillText("名稱", cols.name, thY + thH / 2);
-  ctx.fillText("抽數", cols.pity, thY + thH / 2);
-  ctx.fillText("水位條", cols.bar, thY + thH / 2);
-  ctx.fillText("標記", cols.tags, thY + thH / 2);
-  ctx.fillText("卡池 // 時間", cols.poolTime, thY + thH / 2);
+  ctx.fillText(tr.colName, cols.name, thY + thH / 2);
+  ctx.fillText(tr.colPulls, cols.pity, thY + thH / 2);
+  ctx.fillText(tr.colBar, cols.bar, thY + thH / 2);
+  ctx.fillText(tr.colTags, cols.tags, thY + thH / 2);
+  ctx.fillText(tr.colPoolTime, cols.poolTime, thY + thH / 2);
 
   let rowY = thY + thH + 4;
   if (history.length === 0) {
     ctx.font = `400 ${fs(13)}px ${fontMono}`;
     ctx.fillStyle = pal.muted;
-    ctx.fillText("此卡池尚無 6★ 出貨紀錄", cols.idx, rowY + rowH / 2);
+    ctx.fillText(tr.noHistoryMatch, cols.idx, rowY + rowH / 2);
   } else {
     history.forEach((h, idx) => {
       const cy = rowY + rowH / 2;
@@ -398,12 +416,12 @@ export async function renderStatsToImageBytes(params: {
 
       ctx.font = `700 ${fs(13)}px ${fontMono}`;
       ctx.fillStyle = pal.gold;
-      ctx.fillText(h.name, cols.name, cy);
+      ctx.fillText(localizeItemName(h.itemId, h.name, locale), cols.name, cy);
 
       const pColor = pityColor(h.pity, stat.smallPityMax, pal);
       ctx.font = `400 ${fs(13)}px ${fontMono}`;
       ctx.fillStyle = pColor;
-      ctx.fillText(h.isFree ? "免費" : `${h.pity} 抽`, cols.pity, cy);
+      ctx.fillText(h.isFree ? tr.freeText : `${h.pity} ${tr.pullsUnit}`, cols.pity, cy);
 
       ctx.font = `700 ${fs(12)}px ${fontMono}`;
       ctx.fillText(h.isFree ? "[FREE_PULL]" : renderAsciiBar(h.pity, stat.smallPityMax, 12), cols.bar, cy);
@@ -419,13 +437,17 @@ export async function renderStatsToImageBytes(params: {
         ctx.fillText(text, tx + 5, cy);
         tx += tw + 6;
       };
-      if (h.hasUpInfo) drawTag(h.isUp ? "UP" : "歪", h.isUp ? pal.green : pal.red);
+      if (h.hasUpInfo) drawTag(h.isUp ? "UP" : tr.tagOff, h.isUp ? pal.green : pal.red);
       if (h.isNew) drawTag("NEW", pal.gold);
-      if (h.isFree) drawTag("免費", pal.cyan);
+      if (h.isFree) drawTag(tr.tagFree, pal.cyan);
 
       ctx.font = `400 ${fs(12)}px ${fontMono}`;
       ctx.fillStyle = pal.muted;
-      ctx.fillText(`${h.poolName || "-"} // ${formatDate(h.gachaTs)}`, cols.poolTime, cy);
+      ctx.fillText(
+        `${localizePoolName(h.poolId, h.poolName, locale) || "-"} // ${formatDate(h.gachaTs)}`,
+        cols.poolTime,
+        cy,
+      );
 
       rowY += rowH;
     });
@@ -441,9 +463,9 @@ export async function renderStatsToImageBytes(params: {
 
   ctx.font = `400 ${fs(11)}px ${fontMono}`;
   ctx.fillStyle = pal.muted;
-  const nowStr = new Date().toLocaleString("zh-TW", { hour12: false });
+  const nowStr = new Date().toLocaleString(locale, { hour12: false });
   ctx.fillText(
-    `匯出時間: ${nowStr}  |  畫布: ${logicalWidth}px  字體: ${Math.round(fontScale * 100)}%  輸出: ${canvas.width}×${canvas.height} (${scale}x)`,
+    tr.imgFooter(nowStr, logicalWidth, Math.round(fontScale * 100), canvas.width, canvas.height, scale),
     padX + 14,
     y + footerH / 2,
   );

@@ -112,4 +112,39 @@ describe("AKEGF v0.4 format", () => {
     expect(global.account.serverId).toBe("2");
     expect(global.records.char["E_CharacterGachaPoolType_Standard"]?.length).toBe(1);
   });
+
+  it("routes non-special/non-rerun/non-standard character pools to special pool group (Joint)", () => {
+    const doc = {
+      info: {
+        version: "v0.4" as const,
+        export_app: "Test",
+        export_app_version: "1.0",
+        export_timestamp: 1780000000123,
+      },
+      endfield: [
+        {
+          region: "global" as const,
+          server_id: "2",
+          uid: "12345",
+          lang: "zh-tw",
+          list: [
+            {
+              record_type: "char" as const,
+              seq_id: "1",
+              pool_id: "collab_1_8_1",
+              item_id: "chr_0016_laevat",
+              gacha_ts: 1780000000000,
+              rarity: 6,
+              is_free: false,
+              kind: "draw",
+              item_name: "萊萬汀",
+            },
+          ],
+        },
+      ],
+    };
+    const [bundle] = importFromAkegf(doc);
+    expect(bundle!.records.char["E_CharacterGachaPoolType_Joint"]?.length).toBe(1);
+    expect(bundle!.records.char["E_CharacterGachaPoolType_Standard"]).toBeUndefined();
+  });
 });

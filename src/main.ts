@@ -4,6 +4,8 @@ import "@fontsource/noto-sans-sc/400.css";
 import "@fontsource/noto-sans-sc/700.css";
 import "@fontsource/noto-sans-jp/400.css";
 import "@fontsource/noto-sans-jp/700.css";
+import "@fontsource/noto-sans-kr/400.css";
+import "@fontsource/noto-sans-kr/700.css";
 import "./style.css";
 import type {
   AccountInfo,
@@ -62,6 +64,7 @@ import {
   TRANSLATIONS,
   type Locale,
 } from "./i18n";
+import { localizeItemName, localizePoolName } from "./itemI18n";
 import { DEMO_ACCOUNT, DEMO_POOL_INFO, DEMO_RECORDS } from "./demoData";
 
 type MainTab = "char" | "weapon" | "import";
@@ -191,10 +194,19 @@ function buildCharPoolEntries(records: AccountRecords): PoolEntry[] {
   const rerunRaw = records.char[RERUN_POOL_KEY] || [];
   const rerunStats = analyzeRerunPoolData(rerunRaw, poolInfo, records.charRerunCounts);
 
-  const jointRaw = records.char[JOINT_POOL_KEY] || [];
+  const knownCharPoolKeys = new Set([
+    SPECIAL_POOL_KEY,
+    RERUN_POOL_KEY,
+    STANDARD_POOL_KEY,
+    BEGINNER_POOL_KEY,
+  ]);
+  const jointRaw = Object.entries(records.char || {})
+    .filter(([k]) => !knownCharPoolKeys.has(k))
+    .flatMap(([, list]) => list || []);
   const jointStats = analyzeJointPoolData(jointRaw, poolInfo);
 
   const tr = getTr();
+  const locale = state.store.locale || "zh-TW";
   const combinedLimited = [...specialStats, ...rerunStats, ...jointStats];
   if (combinedLimited.length > 0) {
     const mergedLimited = mergeAllPoolStats(
@@ -215,13 +227,6 @@ function buildCharPoolEntries(records: AccountRecords): PoolEntry[] {
         label: tr.subRerun,
         pity: rerunStats[0]!.pityCount,
         max: rerunStats[0]!.smallPityMax,
-      });
-    }
-    if (jointStats.length > 0) {
-      subPities.push({
-        label: tr.subJoint,
-        pity: jointStats[0]!.pityCount,
-        max: jointStats[0]!.smallPityMax,
       });
     }
     mergedLimited.subPities = subPities;
@@ -245,7 +250,7 @@ function buildCharPoolEntries(records: AccountRecords): PoolEntry[] {
       entries.push({
         id: `char:special:${s.poolId || s.poolName}`,
         group: tr.groupSpecial,
-        label: s.poolName,
+        label: localizePoolName(s.poolId, s.poolName, locale),
         stat: s,
       });
     }
@@ -262,7 +267,7 @@ function buildCharPoolEntries(records: AccountRecords): PoolEntry[] {
       entries.push({
         id: `char:rerun:${s.poolName}`,
         group: tr.groupRerun,
-        label: s.poolName,
+        label: localizePoolName(s.poolId, s.poolName, locale),
         stat: s,
       });
     }
@@ -272,7 +277,7 @@ function buildCharPoolEntries(records: AccountRecords): PoolEntry[] {
     entries.push({
       id: `char:joint:${s.poolId || s.poolName}`,
       group: tr.groupJoint,
-      label: s.poolName,
+      label: localizePoolName(s.poolId, s.poolName, locale),
       stat: s,
     });
   }
@@ -283,7 +288,7 @@ function buildCharPoolEntries(records: AccountRecords): PoolEntry[] {
       entries.push({
         id: `char:simple:${key}`,
         group: tr.groupStandard,
-        label: POOL_NAME_MAP[key] || key,
+        label: localizePoolName(key, POOL_NAME_MAP[key] || key, locale),
         stat: analyzeSimpleCharPool(key, raw),
       });
     }
@@ -294,6 +299,8 @@ function buildCharPoolEntries(records: AccountRecords): PoolEntry[] {
 
 function buildWeaponPoolEntries(records: AccountRecords): PoolEntry[] {
   const entries: PoolEntry[] = [];
+  const tr = getTr();
+  const locale = state.store.locale || "zh-TW";
   const poolInfo = state.store.poolInfo;
   const allStats: GachaStatistics[] = [];
 
@@ -307,15 +314,15 @@ function buildWeaponPoolEntries(records: AccountRecords): PoolEntry[] {
   if (allStats.length > 0) {
     entries.push({
       id: "weapon:all",
-      group: "武器申領",
-      label: "全部武器池",
-      stat: mergeAllPoolStats("武器申領 // 總覽", "weapon", allStats),
+      group: tr.groupWeapon,
+      label: tr.allWeaponLabel,
+      stat: mergeAllPoolStats(tr.allWeaponTitle, "weapon", allStats),
     });
     for (const s of allStats) {
       entries.push({
         id: `weapon:${s.poolId}`,
-        group: "武器申領",
-        label: s.poolName,
+        group: tr.groupWeapon,
+        label: localizePoolName(s.poolId, s.poolName, locale),
         stat: s,
       });
     }
@@ -356,19 +363,19 @@ function renderTopBar(): string {
   return `
     <header class="topbar">
       <div class="brand">
-        <span>Simple Endfield Pull Tracker</span>
+        <span>EggRoll // Endfield Pull Tracker</span>
       </div>
       <div class="topbar-controls">
         <span class="c-muted">${escapeHtml(tr.accountLabel)}</span>
         <select id="account-select">${accountOptions}</select>
-        <button id="btn-sync" ${state.busy || !active?.u8Token ? "disabled" : ""}>${escapeHtml(tr.syncBtn)}</button>
+        <button id="btn-sync" class="btn-sync" ${state.busy || !active?.u8Token ? "disabled" : ""}>${escapeHtml(tr.syncBtn)}</button>
         <button id="btn-export-img" class="btn-export-img" ${!active || state.tab === "import" ? "disabled" : ""}>${escapeHtml(tr.exportImgBtn)}</button>
         <button id="btn-export" ${!active ? "disabled" : ""}>${escapeHtml(tr.exportJsonBtn)}</button>
-        <select id="locale-select" title="Language / 語言">${localeOptions}</select>
         <button id="btn-zoom-out" title="Zoom out (-)">[-]</button>
         <button id="btn-zoom-reset" title="Reset zoom (0)">${Math.round((state.store.zoom ?? 1) * 100)}%</button>
         <button id="btn-zoom-in" title="Zoom in (+)">[+]</button>
         <button id="btn-theme">${escapeHtml(tr.themeBtn(state.store.theme === "dark" ? "DARK" : "LIGHT"))}</button>
+        <select id="locale-select" title="Language / 語言">${localeOptions}</select>
       </div>
     </header>
   `;
@@ -393,6 +400,7 @@ function renderTabBar(): string {
 
 function renderStatsView(entries: PoolEntry[]): string {
   const tr = getTr();
+  const locale = state.store.locale || "zh-TW";
   if (entries.length === 0) {
     return `
       <fieldset class="tui-panel">
@@ -425,16 +433,16 @@ function renderStatsView(entries: PoolEntry[]): string {
         ${items
           .map((it) => {
             const st = it.stat;
-            const badge = st.isCurrentPool ? `<span class="c-green">[當期]</span> ` : "";
+            const badge = st.isCurrentPool ? `<span class="c-green">${escapeHtml(tr.currentBadge)}</span> ` : "";
             return `
               <button class="pool-item ${it.id === selected.id ? "active" : ""}" data-pool-id="${escapeHtml(it.id)}">
                 <div class="pool-item-top">
                   <span class="pool-item-name">${badge}${escapeHtml(it.label)}</span>
-                  <span class="c-muted">${st.totalPulls}抽</span>
+                  <span class="c-muted">${st.totalPulls}${escapeHtml(tr.pullsUnit)}</span>
                 </div>
                 <div class="pool-item-sub">
                   <span class="c-gold">6★: ${st.count6}</span>
-                  <span>${st.subPities ? "合併統計" : `水位: ${st.pityCount}/${st.smallPityMax}`}</span>
+                  <span>${st.subPities ? escapeHtml(tr.mergedLabel) : escapeHtml(tr.pityLabel(st.pityCount, st.smallPityMax))}</span>
                 </div>
               </button>
             `;
@@ -445,15 +453,12 @@ function renderStatsView(entries: PoolEntry[]): string {
     .join("");
 
   const rate6 = s.totalPulls > 0 ? ((s.count6 / s.totalPulls) * 100).toFixed(2) : "0.00";
-  const avgText = s.avgPity6 !== null ? `${s.avgPity6.toFixed(1)} 抽` : "-";
+  const avgText = s.avgPity6 !== null ? `${s.avgPity6.toFixed(1)} ${tr.pullsUnit}` : "-";
   const upRateText = s.upWinRate !== null ? `${s.upWinRate.toFixed(1)}%` : "-";
   const upChecksCount = s.history6.filter((h) => h.hasUpInfo).length;
   const up6Count = s.history6.filter((h) => h.hasUpInfo && h.isUp).length;
   const up6Text = upChecksCount > 0 ? `${up6Count}` : "-";
-  const up6Sub = upChecksCount > 0 ? `歪 ${upChecksCount - up6Count} 次` : "無 UP 池設定";
   const limited6Count = s.history6.filter((h) => isLimited6Star(h, state.store.poolInfo)).length;
-  const limited6Sub =
-    s.count6 > 0 ? `占 6★ ${((limited6Count / s.count6) * 100).toFixed(0)}%` : "無 6★";
   const smallRem = Math.max(0, s.smallPityMax - s.pityCount);
   const smallBar = renderAsciiBar(s.pityCount, s.smallPityMax, 22);
 
@@ -462,9 +467,9 @@ function renderStatsView(entries: PoolEntry[]): string {
     if (s.gotUp6) {
       bigPityHtml = `
         <div class="pity-row">
-          <span class="pity-label">大保底狀態</span>
-          <span class="c-green">[✓ 已取得當期 UP 6★]</span>
-          <span class="c-muted">本池大保底已觸發或提前出貨</span>
+          <span class="pity-label">${escapeHtml(tr.bigPityStatus)}</span>
+          <span class="c-green">${escapeHtml(tr.bigPityGot)}</span>
+          <span class="c-muted">${escapeHtml(tr.bigPityGotSub)}</span>
         </div>
       `;
     } else {
@@ -473,9 +478,9 @@ function renderStatsView(entries: PoolEntry[]): string {
       const brem = s.bigPityRemaining ?? Math.max(0, bmax - bc);
       bigPityHtml = `
         <div class="pity-row">
-          <span class="pity-label">大保底進度</span>
+          <span class="pity-label">${escapeHtml(tr.bigPityProg)}</span>
           <span class="ascii-bar c-gold">${renderAsciiBar(bc, bmax, 22)}</span>
-          <span class="pity-text">${bc} / ${bmax} <span class="c-muted">(距大保底 ${brem} 抽)</span></span>
+          <span class="pity-text">${bc} / ${bmax} <span class="c-muted">${escapeHtml(tr.bigPityRem(brem))}</span></span>
         </div>
       `;
     }
@@ -491,11 +496,15 @@ function renderStatsView(entries: PoolEntry[]): string {
     const tokenEarned = Math.floor(validPulls / tokenStep);
     const tokenProg = validPulls % tokenStep;
     const tokenRem = tokenStep - tokenProg;
+    const earnedHtml =
+      tokenEarned > 0
+        ? `<strong class="c-gold">${escapeHtml(tr.tokenEarnedText(tokenEarned))}</strong>`
+        : `<span class="c-muted">${escapeHtml(tr.tokenEarnedText(tokenEarned))}</span>`;
     tokenHtml = `
       <div class="pity-row">
-        <span class="pity-label">信物進度</span>
+        <span class="pity-label">${escapeHtml(tr.tokenProg)}</span>
         <span class="ascii-bar ${tokenEarned > 0 ? "c-green" : "c-cyan"}">${renderAsciiBar(tokenProg, tokenStep, 22)}</span>
-        <span class="pity-text">${tokenProg} / ${tokenStep} <span class="c-muted">(距下個信物 ${tokenRem} 抽 | 已獲 ${tokenEarned} 個)</span></span>
+        <span class="pity-text">${tokenProg} / ${tokenStep} <span class="c-muted">(${escapeHtml(tr.tokenRemText(tokenRem))} | </span>${earnedHtml}<span class="c-muted">)</span></span>
       </div>
     `;
   } else if (
@@ -507,11 +516,12 @@ function renderStatsView(entries: PoolEntry[]): string {
         ? (s.officialTotalCount ?? s.totalPulls)
         : s.totalPulls;
     const wg = computeWeaponGiftMilestone(validPulls);
+    const giftTargetLabel = wg.nextLabel === "補充武庫箱" ? tr.boxLabel : tr.upWeaponLabel;
     tokenHtml = `
       <div class="pity-row">
-        <span class="pity-label">申領贈禮</span>
+        <span class="pity-label">${escapeHtml(tr.weaponGift)}</span>
         <span class="ascii-bar ${wg.weaponsEarned > 0 ? "c-green" : "c-cyan"}">${renderAsciiBar(wg.prog, wg.span, 22)}</span>
-        <span class="pity-text">${wg.pulls} / ${wg.nextTarget} <span class="c-muted">(距${wg.nextLabel} ${wg.remaining} 抽 | 已獲 箱×${wg.boxesEarned} / UP×${wg.weaponsEarned})</span></span>
+        <span class="pity-text">${wg.pulls} / ${wg.nextTarget} <span class="c-muted">${escapeHtml(tr.weaponGiftDesc(giftTargetLabel, wg.remaining, wg.boxesEarned, wg.weaponsEarned))}</span></span>
       </div>
     `;
   }
@@ -520,7 +530,7 @@ function renderStatsView(entries: PoolEntry[]): string {
     ? `
       <div class="pity-section">
         <div class="pity-row">
-          <span class="pity-label">各池小保底</span>
+          <span class="pity-label">${escapeHtml(tr.subPities)}</span>
           <span class="c-cyan" style="grid-column: 2 / -1;">${s.subPities.map((sp) => `${escapeHtml(sp.label)} ${sp.pity}/${sp.max}`).join(" &nbsp;|&nbsp; ")}</span>
         </div>
       </div>
@@ -528,9 +538,9 @@ function renderStatsView(entries: PoolEntry[]): string {
     : `
       <div class="pity-section">
         <div class="pity-row">
-          <span class="pity-label">小保底水位</span>
+          <span class="pity-label">${escapeHtml(tr.smallPity)}</span>
           <span class="ascii-bar ${pityColorClass(s.pityCount, s.smallPityMax)}">${smallBar}</span>
-          <span class="pity-text">${s.pityCount} / ${s.smallPityMax} <span class="c-muted">(距小保底 ${smallRem} 抽)</span></span>
+          <span class="pity-text">${s.pityCount} / ${s.smallPityMax} <span class="c-muted">${escapeHtml(tr.smallPityRem(smallRem))}</span></span>
         </div>
         ${bigPityHtml}
         ${tokenHtml}
@@ -568,7 +578,7 @@ function renderStatsView(entries: PoolEntry[]): string {
 
   const rowsHtml =
     displayedHistory.length === 0
-      ? `<tr><td colspan="6" class="c-muted" style="text-align:center; padding: 18px;">無符合條件的 6★ 出貨紀錄</td></tr>`
+      ? `<tr><td colspan="6" class="c-muted" style="text-align:center; padding: 18px;">${escapeHtml(tr.noHistoryMatch)}</td></tr>`
       : displayedHistory
           .map((h, idx) => {
             const pCls = pityColorClass(h.pity, s.smallPityMax);
@@ -578,20 +588,20 @@ function renderStatsView(entries: PoolEntry[]): string {
               tags.push(
                 h.isUp
                   ? `<span class="tag c-green">UP</span>`
-                  : `<span class="tag c-red">歪</span>`,
+                  : `<span class="tag c-red">${escapeHtml(tr.tagOff)}</span>`,
               );
             }
             if (h.isNew) tags.push(`<span class="tag c-gold">NEW</span>`);
-            if (h.isFree) tags.push(`<span class="tag c-cyan">免費</span>`);
+            if (h.isFree) tags.push(`<span class="tag c-cyan">${escapeHtml(tr.tagFree)}</span>`);
 
             return `
               <tr>
                 <td class="c-muted">${startIdx + idx + 1}</td>
-                <td class="c-gold"><strong>${escapeHtml(h.name)}</strong></td>
-                <td class="${pCls}">${h.isFree ? "免費" : `${h.pity} 抽`}</td>
+                <td class="c-gold"><strong>${escapeHtml(localizeItemName(h.itemId, h.name, locale))}</strong></td>
+                <td class="${pCls}">${h.isFree ? escapeHtml(tr.freeText) : `${h.pity} ${escapeHtml(tr.pullsUnit)}`}</td>
                 <td class="ascii-bar ${pCls}">${bar}</td>
                 <td>${tags.join("") || `<span class="c-muted">-</span>`}</td>
-                <td class="c-muted">${escapeHtml(h.poolName || "-")} // ${escapeHtml(formatTs(h.gachaTs))}</td>
+                <td class="c-muted">${escapeHtml(localizePoolName(h.poolId, h.poolName, locale) || "-")} // ${escapeHtml(formatTs(h.gachaTs))}</td>
               </tr>
             `;
           })
@@ -600,16 +610,13 @@ function renderStatsView(entries: PoolEntry[]): string {
   const sortArrow = (field: SortField) =>
     state.sortField === field ? (state.sortDir === "desc" ? " ▼" : " ▲") : "";
 
-  const historyTitle =
-    displayedHistory.length < sortedHistory.length
-      ? `6★ 出貨紀錄 (顯示 ${displayedHistory.length} / 共 ${sortedHistory.length} 筆)`
-      : `6★ 出貨紀錄 (${sortedHistory.length})`;
+  const historyTitle = tr.historyTitle(displayedHistory.length, sortedHistory.length);
   const customLimitVal = limit === "all" ? "" : String(limit);
 
   return `
     <div class="workspace">
       <fieldset class="tui-panel">
-        <legend class="tui-legend">卡池列表 (${entries.length})</legend>
+        <legend class="tui-legend">${escapeHtml(tr.poolListTitle(entries.length))}</legend>
         <div class="tui-panel-scroll sidebar-list">
           ${sidebarHtml}
         </div>
@@ -617,7 +624,7 @@ function renderStatsView(entries: PoolEntry[]): string {
 
       <div class="main-pane">
         <fieldset class="tui-panel">
-          <legend class="tui-legend">${escapeHtml(s.poolName)}</legend>
+          <legend class="tui-legend">${escapeHtml(localizePoolName(s.poolId, s.poolName, locale))}</legend>
           <div class="kpi-grid">
             <div class="kpi-cell">
               <span class="kpi-label">${escapeHtml(tr.kpiTotalPulls)}</span>
@@ -655,28 +662,28 @@ function renderStatsView(entries: PoolEntry[]): string {
         </fieldset>
 
         <fieldset class="tui-panel">
-          <legend class="tui-legend">${historyTitle}</legend>
+          <legend class="tui-legend">${escapeHtml(historyTitle)}</legend>
           <div class="table-toolbar">
             <div class="table-toolbar-group">
-              <button class="${state.historyFilter === "all" ? "active" : ""}" data-filter="all">[全部 6★]</button>
-              <button class="${state.historyFilter === "offbanner" ? "active" : ""}" data-filter="offbanner">[僅看歪]</button>
+              <button class="${state.historyFilter === "all" ? "active" : ""}" data-filter="all">${escapeHtml(tr.filterAll)}</button>
+              <button class="${state.historyFilter === "offbanner" ? "active" : ""}" data-filter="offbanner">${escapeHtml(tr.filterOff)}</button>
             </div>
             <div class="table-toolbar-group">
-              <span class="c-muted">顯示:</span>
+              <span class="c-muted">${escapeHtml(tr.showLabel)}</span>
               <button class="${limit === 10 ? "active" : ""}" data-limit="10">10</button>
               <button class="${limit === 20 ? "active" : ""}" data-limit="20">20</button>
               <button class="${limit === 50 ? "active" : ""}" data-limit="50">50</button>
-              <button class="${limit === "all" ? "active" : ""}" data-limit="all">全部</button>
-              <input id="custom-limit-input" type="number" min="1" placeholder="自訂" value="${escapeHtml(customLimitVal)}" style="width:64px; padding:3px 6px;" title="輸入要顯示的 6★ 筆數後按 Enter 或移開焦點" />
+              <button class="${limit === "all" ? "active" : ""}" data-limit="all">${escapeHtml(tr.allOpt)}</button>
+              <input id="custom-limit-input" type="number" min="1" placeholder="${escapeHtml(tr.customPlaceholder)}" value="${escapeHtml(customLimitVal)}" style="width:64px; padding:3px 6px;" />
             </div>
             <div class="table-toolbar-group">
-              <button id="btn-page-prev" ${state.historyPage <= 1 ? "disabled" : ""}>[&lt; 上一頁]</button>
-              <span class="c-muted">第 ${state.historyPage} / ${totalPages} 頁</span>
-              <button id="btn-page-next" ${state.historyPage >= totalPages ? "disabled" : ""}>[下一頁 &gt;]</button>
+              <button id="btn-page-prev" ${state.historyPage <= 1 ? "disabled" : ""}>${escapeHtml(tr.prevPage)}</button>
+              <span class="c-muted">${escapeHtml(tr.pageInfo(state.historyPage, totalPages))}</span>
+              <button id="btn-page-next" ${state.historyPage >= totalPages ? "disabled" : ""}>${escapeHtml(tr.nextPage)}</button>
             </div>
             <div class="table-toolbar-group">
-              <button class="${state.sortField === "time" ? "active" : ""}" data-sort="time">[時間${sortArrow("time")}]</button>
-              <button class="${state.sortField === "pity" ? "active" : ""}" data-sort="pity">[抽數${sortArrow("pity")}]</button>
+              <button class="${state.sortField === "time" ? "active" : ""}" data-sort="time">[${escapeHtml(tr.sortTime)}${sortArrow("time")}]</button>
+              <button class="${state.sortField === "pity" ? "active" : ""}" data-sort="pity">[${escapeHtml(tr.sortPity)}${sortArrow("pity")}]</button>
             </div>
           </div>
           <div class="tui-panel-scroll">
@@ -684,11 +691,11 @@ function renderStatsView(entries: PoolEntry[]): string {
               <thead>
                 <tr>
                   <th>#</th>
-                  <th>名稱</th>
-                  <th class="sortable" data-sort="pity">抽數${sortArrow("pity")}</th>
-                  <th>水位條</th>
-                  <th>標記</th>
-                  <th class="sortable" data-sort="time">卡池 // 時間${sortArrow("time")}</th>
+                  <th>${escapeHtml(tr.colName)}</th>
+                  <th class="sortable" data-sort="pity">${escapeHtml(tr.colPulls)}${sortArrow("pity")}</th>
+                  <th>${escapeHtml(tr.colBar)}</th>
+                  <th>${escapeHtml(tr.colTags)}</th>
+                  <th class="sortable" data-sort="time">${escapeHtml(tr.colPoolTime)}${sortArrow("time")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -703,9 +710,10 @@ function renderStatsView(entries: PoolEntry[]): string {
 }
 
 function renderImportView(): string {
+  const tr = getTr();
   const accountsHtml =
     state.store.accounts.length === 0
-      ? `<div class="c-muted">尚無已儲存帳號</div>`
+      ? `<div class="c-muted">${escapeHtml(tr.noAccounts)}</div>`
       : state.store.accounts
           .map(
             (a) => `
@@ -715,8 +723,8 @@ function renderImportView(): string {
                   <span class="c-muted">(${escapeHtml(a.roleId || a.uid)} / ${escapeHtml(a.serverName)})</span>
                 </span>
                 <div class="row">
-                  <button data-use-account="${escapeHtml(a.key)}">[切換]</button>
-                  <button class="c-red" data-del-account="${escapeHtml(a.key)}">[刪除]</button>
+                  <button data-use-account="${escapeHtml(a.key)}">${escapeHtml(tr.switchBtn)}</button>
+                  <button class="c-red" data-del-account="${escapeHtml(a.key)}">${escapeHtml(tr.deleteBtn)}</button>
                 </div>
               </div>
             `,
@@ -726,47 +734,47 @@ function renderImportView(): string {
   return `
     <div class="import-pane">
       <fieldset class="tui-panel">
-        <legend class="tui-legend">1. 自動讀取本機遊戲日誌 (HGWebview.log)</legend>
+        <legend class="tui-legend">${escapeHtml(tr.importLogTitle)}</legend>
         <div class="form-stack">
-          <div class="c-muted">請先在遊戲內打開一次「尋訪紀錄」，再點擊下方讀取（預設偵測國際服 Gryphline 日誌）。</div>
+          <div class="c-muted">${escapeHtml(tr.importLogDesc)}</div>
           <div class="row">
-            <input id="custom-log-path" class="grow" placeholder="選填: 自訂 HGWebview.log 完整路徑 (Linux/Wine 用戶可填)" value="${escapeHtml(state.customLogPath)}" />
+            <input id="custom-log-path" class="grow" placeholder="${escapeHtml(tr.importLogPathPlaceholder)}" value="${escapeHtml(state.customLogPath)}" />
           </div>
           <div class="row">
-            <button id="btn-read-log" ${state.busy ? "disabled" : ""}>[讀取日誌並同步]</button>
+            <button id="btn-read-log" ${state.busy ? "disabled" : ""}>${escapeHtml(tr.importLogBtn)}</button>
           </div>
         </div>
       </fieldset>
 
       <fieldset class="tui-panel">
-        <legend class="tui-legend">2. 貼上抽卡連結 / u8_token (國際服 / Skport)</legend>
+        <legend class="tui-legend">${escapeHtml(tr.importUrlTitle)}</legend>
         <div class="form-stack">
-          <div class="c-muted">支援貼上完整 https://ef-webview.gryphline.com... 連結或從 Skport 複製的純 u8_token（自動偵測區服）。</div>
-          <textarea id="url-token-input" rows="3" placeholder="貼上抽卡連結或 u8_token...">${escapeHtml(state.urlInput)}</textarea>
+          <div class="c-muted">${escapeHtml(tr.importUrlDesc)}</div>
+          <textarea id="url-token-input" rows="3" placeholder="${escapeHtml(tr.importUrlPlaceholder)}">${escapeHtml(state.urlInput)}</textarea>
           <div class="row">
-            <span class="c-muted">區服:</span>
-            <input id="manual-server-id" style="width:110px;" placeholder="auto (自動)" value="${escapeHtml(state.manualServerId)}" title="保留 auto 會自動偵測區服" />
-            <button id="btn-sync-url" ${state.busy ? "disabled" : ""}>[解析並同步]</button>
+            <span class="c-muted">${escapeHtml(tr.serverLabel)}</span>
+            <input id="manual-server-id" style="width:110px;" placeholder="${escapeHtml(tr.manualServerPlaceholder)}" value="${escapeHtml(state.manualServerId)}" />
+            <button id="btn-sync-url" ${state.busy ? "disabled" : ""}>${escapeHtml(tr.syncUrlBtn)}</button>
           </div>
         </div>
       </fieldset>
 
       <fieldset class="tui-panel">
-        <legend class="tui-legend">3. AKEGF (${AKEGF_VERSION}) 標準匯入 / 示範資料</legend>
+        <legend class="tui-legend">${escapeHtml(tr.importFileTitle(AKEGF_VERSION))}</legend>
         <div class="form-stack">
           <div class="c-muted">
-            本工具支援 <a href="${AKEGF_HOME_URL}" target="_blank" rel="noreferrer" class="c-cyan">AKEGF ${AKEGF_VERSION}</a> 抽卡紀錄格式標準匯入／匯出，所有資料僅儲存在本機。
+            <a href="${AKEGF_HOME_URL}" target="_blank" rel="noreferrer" class="c-cyan">AKEGF ${AKEGF_VERSION}</a> — ${escapeHtml(tr.importFileDesc(AKEGF_VERSION))}
           </div>
           <div class="row">
             <input id="file-import-json" type="file" accept=".json" style="display:none;" />
-            <button id="btn-trigger-import" type="button">[匯入 AKEGF / JSON]</button>
-            <button id="btn-load-demo-2" type="button">[載入示範資料]</button>
+            <button id="btn-trigger-import" type="button">${escapeHtml(tr.importFileBtn)}</button>
+            <button id="btn-load-demo-2" type="button">${escapeHtml(tr.demoBtn)}</button>
           </div>
         </div>
       </fieldset>
 
       <fieldset class="tui-panel">
-        <legend class="tui-legend">4. 已儲存帳號管理</legend>
+        <legend class="tui-legend">${escapeHtml(tr.accountMgmtTitle)}</legend>
         <div class="form-stack">
           ${accountsHtml}
         </div>
@@ -787,48 +795,49 @@ function renderStatusBar(): string {
 
 function renderImageModal(): string {
   if (!state.imgModalOpen) return "";
+  const tr = getTr();
   return `
     <div class="modal-backdrop" id="img-modal-backdrop">
       <fieldset class="tui-panel modal-box">
-        <legend class="tui-legend">匯出抽卡紀錄圖片</legend>
+        <legend class="tui-legend">${escapeHtml(tr.imgModalTitle)}</legend>
         <div class="form-stack">
           <div class="row">
-            <span class="c-muted" style="min-width:76px;">圖片格式:</span>
-            <button class="${state.imgFormat === "png" ? "active" : ""}" data-img-fmt="png">PNG (無損)</button>
+            <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgFmt)}</span>
+            <button class="${state.imgFormat === "png" ? "active" : ""}" data-img-fmt="png">${escapeHtml(tr.imgFmtPng)}</button>
             <button class="${state.imgFormat === "jpeg" ? "active" : ""}" data-img-fmt="jpeg">JPG</button>
             <button class="${state.imgFormat === "webp" ? "active" : ""}" data-img-fmt="webp">WebP</button>
           </div>
           <div class="row">
-            <span class="c-muted" style="min-width:76px;">畫面寬度:</span>
+            <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgWidth)}</span>
             <button class="${state.imgWidth === 900 ? "active" : ""}" data-img-width="900">900px</button>
             <button class="${state.imgWidth === 1080 ? "active" : ""}" data-img-width="1080">1080px</button>
             <button class="${state.imgWidth === 1280 ? "active" : ""}" data-img-width="1280">1280px</button>
             <button class="${state.imgWidth === 1440 ? "active" : ""}" data-img-width="1440">1440px</button>
           </div>
           <div class="row">
-            <span class="c-muted" style="min-width:76px;">字體大小:</span>
-            <button class="${state.imgFontScale === 0.9 ? "active" : ""}" data-img-font="0.9">小 (90%)</button>
-            <button class="${state.imgFontScale === 1 ? "active" : ""}" data-img-font="1">標準 (100%)</button>
-            <button class="${state.imgFontScale === 1.15 ? "active" : ""}" data-img-font="1.15">大 (115%)</button>
-            <button class="${state.imgFontScale === 1.3 ? "active" : ""}" data-img-font="1.3">特大 (130%)</button>
+            <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgFont)}</span>
+            <button class="${state.imgFontScale === 0.9 ? "active" : ""}" data-img-font="0.9">${escapeHtml(tr.imgFontSmall)}</button>
+            <button class="${state.imgFontScale === 1 ? "active" : ""}" data-img-font="1">${escapeHtml(tr.imgFontNormal)}</button>
+            <button class="${state.imgFontScale === 1.15 ? "active" : ""}" data-img-font="1.15">${escapeHtml(tr.imgFontLarge)}</button>
+            <button class="${state.imgFontScale === 1.3 ? "active" : ""}" data-img-font="1.3">${escapeHtml(tr.imgFontXL)}</button>
           </div>
           <div class="row">
-            <span class="c-muted" style="min-width:76px;">上採樣率:</span>
+            <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgScale)}</span>
             <button class="${state.imgScale === 1 ? "active" : ""}" data-img-scale="1">1x</button>
-            <button class="${state.imgScale === 2 ? "active" : ""}" data-img-scale="2">2x (推薦)</button>
+            <button class="${state.imgScale === 2 ? "active" : ""}" data-img-scale="2">${escapeHtml(tr.imgScaleRec)}</button>
             <button class="${state.imgScale === 3 ? "active" : ""}" data-img-scale="3">3x</button>
-            <span class="c-muted">→ 輸出寬度 ${state.imgWidth * state.imgScale}px</span>
+            <span class="c-muted">${escapeHtml(tr.imgOutWidth(state.imgWidth * state.imgScale))}</span>
           </div>
           <div class="row">
-            <span class="c-muted" style="min-width:76px;">6★ 筆數:</span>
+            <span class="c-muted" style="min-width:76px;">${escapeHtml(tr.imgCount)}</span>
             <button class="${state.imgHistoryLimit === 10 ? "active" : ""}" data-img-limit="10">10</button>
             <button class="${state.imgHistoryLimit === 20 ? "active" : ""}" data-img-limit="20">20</button>
             <button class="${state.imgHistoryLimit === 50 ? "active" : ""}" data-img-limit="50">50</button>
-            <button class="${state.imgHistoryLimit === "all" ? "active" : ""}" data-img-limit="all">全部</button>
+            <button class="${state.imgHistoryLimit === "all" ? "active" : ""}" data-img-limit="all">${escapeHtml(tr.allOpt)}</button>
           </div>
           <div class="row" style="justify-content:flex-end; margin-top:6px;">
-            <button id="btn-img-cancel">[取消]</button>
-            <button id="btn-img-confirm" class="active">[選擇儲存位置並匯出]</button>
+            <button id="btn-img-cancel">${escapeHtml(tr.cancelBtn)}</button>
+            <button id="btn-img-confirm" class="active">${escapeHtml(tr.confirmExportBtn)}</button>
           </div>
         </div>
       </fieldset>
@@ -863,8 +872,9 @@ function render(): void {
 }
 
 async function runSyncWithInput(rawInput: string, fallbackProv: Provider, fallbackSid: string) {
+  const tr = getTr();
   state.busy = true;
-  setStatus("正在解析帳號資訊...");
+  setStatus(tr.statusParsing);
   render();
 
   try {
@@ -892,9 +902,9 @@ async function runSyncWithInput(rawInput: string, fallbackProv: Provider, fallba
 
     state.tab = "char";
     state.selectedPoolId = "";
-    setStatus(`同步完成 // 新增角色 ${result.addedChar} 筆、武器 ${result.addedWeapon} 筆`);
+    setStatus(tr.statusSyncDone(result.addedChar, result.addedWeapon));
   } catch (err: any) {
-    setStatus(`錯誤: ${err?.message || String(err)}`, true);
+    setStatus(tr.statusError(err?.message || String(err)), true);
   } finally {
     state.busy = false;
     render();
@@ -911,24 +921,25 @@ async function loadDemoData() {
   await saveAppStore(state.store);
   state.tab = "char";
   state.selectedPoolId = "";
-  setStatus("已載入示範資料 (管理員老先生)");
+  setStatus(getTr().statusDemoLoaded);
   render();
 }
 
 async function exportActiveJson() {
   const acc = getActiveAccount();
   if (!acc) return;
-  const filename = `sept-akegf-${formatFileTimestamp()}.json`;
+  const tr = getTr();
+  const filename = `eggroll-akegf-${formatFileTimestamp()}.json`;
   const payload = exportAccountToAkegf(acc, getActiveRecords());
   try {
     const savedPath = await exportJsonToFile(filename, JSON.stringify(payload, null, 2));
     if (savedPath) {
-      setStatus(`已匯出 AKEGF ${AKEGF_VERSION} 至: ${savedPath}`);
+      setStatus(tr.statusExportJsonOk(AKEGF_VERSION, savedPath));
     } else {
-      setStatus("已取消匯出 AKEGF JSON");
+      setStatus(tr.statusExportJsonCancel);
     }
   } catch (err: any) {
-    setStatus(`匯出失敗: ${err?.message || String(err)}`, true);
+    setStatus(tr.statusExportFail(err?.message || String(err)), true);
   }
 }
 
@@ -942,6 +953,7 @@ function bindEvents(): void {
 
   document.getElementById("locale-select")?.addEventListener("change", async (e) => {
     state.store.locale = (e.target as HTMLSelectElement).value as Locale;
+    setStatus(getTr().statusReady);
     await saveAppStore(state.store);
     render();
   });
@@ -1018,15 +1030,16 @@ function bindEvents(): void {
         ? buildWeaponPoolEntries(getActiveRecords())
         : buildCharPoolEntries(getActiveRecords());
     const selected = entries.find((e) => e.id === state.selectedPoolId) || entries[0];
+    const tr = getTr();
     if (!selected) {
-      setStatus("目前沒有可匯出的卡池資料", true);
+      setStatus(tr.statusNoExportData, true);
       state.imgModalOpen = false;
       render();
       return;
     }
 
     state.imgModalOpen = false;
-    setStatus("正在產生高解析度圖片...");
+    setStatus(tr.statusGeneratingImg);
     render();
 
     try {
@@ -1043,15 +1056,15 @@ function bindEvents(): void {
         historyLimit: state.imgHistoryLimit,
       });
       const ext = state.imgFormat === "jpeg" ? "jpg" : state.imgFormat;
-      const filename = `sept-${state.tab}-${state.imgScale}x-${formatFileTimestamp()}.${ext}`;
+      const filename = `eggroll-${state.tab}-${state.imgScale}x-${formatFileTimestamp()}.${ext}`;
       const savedPath = await exportBinaryToFile(filename, bytes, mimeType);
       if (savedPath) {
-        setStatus(`已匯出圖片 (${width}×${height}): ${savedPath}`);
+        setStatus(tr.statusExportImgOk(width, height, savedPath));
       } else {
-        setStatus("已取消匯出圖片");
+        setStatus(tr.statusExportImgCancel);
       }
     } catch (err: any) {
-      setStatus(`圖片匯出失敗: ${err?.message || String(err)}`, true);
+      setStatus(tr.statusExportImgFail(err?.message || String(err)), true);
     }
   });
 
@@ -1146,8 +1159,9 @@ function bindEvents(): void {
   });
 
   document.getElementById("btn-read-log")?.addEventListener("click", async () => {
+    const tr = getTr();
     state.busy = true;
-    setStatus("正在讀取遊戲日誌...");
+    setStatus(tr.statusReadingLog);
     render();
     try {
       const res = await detectGachaLog("gryphline", state.customLogPath);
@@ -1155,7 +1169,7 @@ function bindEvents(): void {
       await runSyncWithInput(res.url, res.provider, "auto");
     } catch (err: any) {
       state.busy = false;
-      setStatus(`日誌讀取失敗: ${err?.message || String(err)}`, true);
+      setStatus(tr.statusLogFail(err?.message || String(err)), true);
       render();
     }
   });
@@ -1171,6 +1185,7 @@ function bindEvents(): void {
   document.getElementById("file-import-json")?.addEventListener("change", async (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (!file) return;
+    const tr = getTr();
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
@@ -1187,7 +1202,7 @@ function bindEvents(): void {
         await saveAppStore(state.store);
         state.tab = "char";
         state.selectedPoolId = "";
-        setStatus(`已匯入 AKEGF ${parsed.info.version} (${bundles.length} 個帳號)`);
+        setStatus(tr.statusImportAkegfOk(parsed.info.version, bundles.length));
       } else if (parsed?.account?.key && parsed?.records) {
         const acc = parsed.account as AccountInfo;
         const idx = state.store.accounts.findIndex((a) => a.key === acc.key);
@@ -1201,12 +1216,12 @@ function bindEvents(): void {
         await saveAppStore(state.store);
         state.tab = "char";
         state.selectedPoolId = "";
-        setStatus(`已從 ${file.name} 匯入帳號 ${acc.nickName}`);
+        setStatus(tr.statusImportAccountOk(file.name, acc.nickName));
       } else {
-        throw new Error("不支援的 JSON 格式（需為 AKEGF v0.4 或本工具舊版備份）");
+        throw new Error(tr.statusUnsupportedJson);
       }
     } catch (err: any) {
-      setStatus(`匯入失敗: ${err?.message || String(err)}`, true);
+      setStatus(tr.statusImportFail(err?.message || String(err)), true);
     }
     render();
   });
@@ -1231,7 +1246,7 @@ function bindEvents(): void {
         state.store.activeAccountKey = state.store.accounts[0]?.key;
       }
       await saveAppStore(state.store);
-      setStatus("已刪除帳號資料");
+      setStatus(getTr().statusAccountDeleted);
       render();
     });
   });
@@ -1282,6 +1297,7 @@ window.addEventListener("keydown", (e) => {
 
 async function bootstrap() {
   state.store = await loadAppStore();
+  setStatus(getTr().statusReady);
   render();
 }
 
