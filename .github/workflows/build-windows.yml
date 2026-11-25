@@ -46,16 +46,25 @@ jobs:
       - name: Build Tauri Windows binary
         run: pnpm tauri build
 
+      - name: Rename Windows executable
+        shell: pwsh
+        run: |
+          $conf = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $ver = $conf.version
+          $src = "src-tauri/target/release/endfield-gacha-tui.exe"
+          $dst = "src-tauri/target/release/EggRoll_${ver}_x64.exe"
+          Copy-Item -Path $src -Destination $dst -Force
+
       - name: Upload Windows .exe artifact
         uses: actions/upload-artifact@v7
         with:
           name: EggRoll-windows-x64
-          path: src-tauri/target/release/*.exe
+          path: src-tauri/target/release/EggRoll_*_x64.exe
           if-no-files-found: error
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/release/*.exe
+          files: src-tauri/target/release/EggRoll_*_x64.exe
           generate_release_notes: true
