@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AccountInfo,
   AccountRecords,
@@ -199,6 +200,155 @@ export async function saveAppStore(store: AppStore): Promise<void> {
   } else {
     localStorage.setItem(LOCAL_STORAGE_FALLBACK_KEY, JSON.stringify(store));
   }
+}
+
+export async function openOfficialLoginWindow(
+  provider: Provider = "gryphline",
+  locale: Locale = "zh-TW",
+): Promise<string | null> {
+  if (!isTauriEnv()) {
+    throw new Error(TRANSLATIONS[locale].errBrowserLog);
+  }
+
+  return new Promise<string | null>(async (resolve, reject) => {
+    let unlistenSuccess: UnlistenFn | null = null;
+    let unlistenClose: UnlistenFn | null = null;
+    let isResolved = false;
+
+    const cleanup = () => {
+      if (unlistenSuccess) unlistenSuccess();
+      if (unlistenClose) unlistenClose();
+    };
+
+    try {
+      unlistenSuccess = await listen<string>("hg-login-success", (event) => {
+        if (isResolved) return;
+        isResolved = true;
+        cleanup();
+        resolve(event.payload || null);
+      });
+
+      unlistenClose = await listen("hg-login-closed", () => {
+        if (isResolved) return;
+        isResolved = true;
+        cleanup();
+        resolve(null);
+      });
+
+      await invoke("open_login_window", { provider });
+    } catch (err) {
+      cleanup();
+      reject(err);
+    }
+  });
+}
+
+async function grantOAuthToken(loginToken: string, provider: Provider): Promise<string | null> {
+  const url = `https://as.${provider}.com/user/oauth2/v2/grant`;
+  const appCode = provider === "gryphline" ? "3dacefa138426cfe" : "be36d44aa36bfb5b";
+  const res = await httpPostJson<any>(url, {
+    token: loginToken,
+    appCode,
+    type: 1,
+  });
+  if (res?.status === 0 && res?.data?.token) {
+    return String(res.data.token);
+  }
+  return null;
+}
+
+export async function refreshU8TokenFromLoginToken(
+  loginToken: string,
+  uid: string,
+  provider: Provider,
+): Promise<string | null> {
+  const oauthToken = await grantOAuthToken(loginToken, provider);
+  if (!oauthToken) return null;
+  const res = await httpPostJson<any>(
+    `https://binding-api-account-prod.${provider}.com/account/binding/v1/u8_token_by_uid`,
+    { uid, token: oauthToken },
+  );
+  if (res?.status === 0 && res?.data?.token) {
+    return String(res.data.token);
+  }
+  return null;
+}
+
+export async function exchangeLoginTokenToAccounts(
+  loginToken: string,
+  provider: Provider = "gryphline",
+  locale: Locale = "zh-TW",
+): Promise<AccountInfo[]> {
+  const tr = TRANSLATIONS[locale];
+  const oauthToken = await grantOAuthToken(loginToken, provider);
+  if (!oauthToken) {
+    throw new Error(tr.errOAuthFailed);
+  }
+
+  const query = new URLSearchParams({
+    token: oauthToken,
+    appCode: "endfield",
+  });
+  const bindRes = await httpGetJson<any>(
+    `https://binding-api-account-prod.${provider}.com/account/binding/v1/binding_list?${query.toString()}`,
+  );
+  const list = Array.isArray(bindRes?.data?.list) ? bindRes.data.list : [];
+  const appInfo =
+    list.find((x: any) => x?.appCode === "endfield") || list[0];
+  const bindings: any[] = Array.isArray(appInfo?.bindingList)
+    ? appInfo.bindingList
+    : list;
+  const regionPrefix = provider === "hypergryph" ? "cn" : "global";
+  const accounts: AccountInfo[] = [];
+
+  for (const binding of bindings) {
+    const uid = String(binding?.uid ?? "").trim();
+    if (!uid) continue;
+    const u8TokenRes = await httpPostJson<any>(
+      `https://binding-api-account-prod.${provider}.com/account/binding/v1/u8_token_by_uid`,
+      { uid, token: oauthToken },
+    );
+    const u8Token = String(u8TokenRes?.data?.token ?? "").trim();
+    if (!u8Token) continue;
+
+    const roles = Array.isArray(binding?.roles) ? binding.roles : [];
+    if (roles.length === 0) {
+      const queried = await queryAccountFromToken(
+        { u8Token, provider, serverId: provider === "hypergryph" ? "1" : "auto" },
+        locale,
+      ).catch(() => null);
+      if (queried) {
+        accounts.push({ ...queried, loginToken });
+      }
+      continue;
+    }
+
+    for (const role of roles) {
+      const roleId = String(role?.roleId ?? "").trim();
+      if (!roleId) continue;
+      const serverId = String(role?.serverId ?? (provider === "hypergryph" ? "1" : "2")).trim();
+      const serverName = String(
+        role?.serverName ?? (provider === "hypergryph" ? tr.serverCn : `Server-${serverId}`),
+      ).trim();
+      const nickName = String(role?.nickName ?? role?.nickname ?? roleId).trim() || roleId;
+      accounts.push({
+        key: `${regionPrefix}_${serverId}_${roleId}`,
+        uid,
+        roleId,
+        nickName,
+        serverId,
+        serverName,
+        provider,
+        u8Token,
+        loginToken,
+      });
+    }
+  }
+
+  if (accounts.length === 0) {
+    throw new Error(tr.errNoBindingRoles);
+  }
+  return accounts;
 }
 
 export async function detectGachaLog(

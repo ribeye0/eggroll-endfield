@@ -644,6 +644,19 @@ tbody tr:hover {
   min-width: 180px;
 }
 
+.login-region-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+button.btn-block {
+  width: 100%;
+  padding: 8px 12px;
+  text-align: center;
+}
+
 .account-row {
   display: flex;
   align-items: center;

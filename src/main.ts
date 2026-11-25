@@ -35,11 +35,14 @@ import {
 } from "./gachaCalc";
 import {
   detectGachaLog,
+  exchangeLoginTokenToAccounts,
   exportBinaryToFile,
   exportJsonToFile,
   loadAppStore,
+  openOfficialLoginWindow,
   parseGachaUrlOrToken,
   queryAccountFromToken,
+  refreshU8TokenFromLoginToken,
   saveAppStore,
   syncAccountGacha,
 } from "./api";
@@ -97,6 +100,7 @@ const state = {
   statusText: "就緒",
   statusError: false,
   logProvider: "gryphline" as Provider,
+  loginProvider: "gryphline" as Provider,
   customLogPath: "",
   urlInput: "",
   manualProvider: "gryphline" as Provider,
@@ -397,7 +401,7 @@ function renderTopBar(): string {
       <div class="topbar-controls">
         <span class="c-muted">${escapeHtml(tr.accountLabel)}</span>
         <select id="account-select">${accountOptions}</select>
-        <button id="btn-sync" class="btn-sync" ${state.busy || !active?.u8Token ? "disabled" : ""}>${escapeHtml(tr.syncBtn)}</button>
+        <button id="btn-sync" class="btn-sync" ${state.busy || (!active?.u8Token && !active?.loginToken) ? "disabled" : ""}>${escapeHtml(tr.syncBtn)}</button>
         <button id="btn-export-img" class="btn-export-img" ${!active || state.tab === "import" ? "disabled" : ""}>${escapeHtml(tr.exportImgBtn)}</button>
         <button id="btn-export" ${!active ? "disabled" : ""}>${escapeHtml(tr.exportJsonBtn)}</button>
         <button id="btn-zoom-out" title="Zoom out (-)">[-]</button>
@@ -828,6 +832,21 @@ function renderImportView(): string {
   return `
     <div class="import-pane">
       <fieldset class="tui-panel">
+        <legend class="tui-legend">${escapeHtml(tr.importLoginTitle)}</legend>
+        <div class="form-stack">
+          <div class="c-muted">${escapeHtml(tr.importLoginDesc)}</div>
+          <div class="login-region-row">
+            <span class="c-muted">${escapeHtml(tr.regionLabel)}</span>
+            <select id="login-provider-select" class="grow" ${state.busy ? "disabled" : ""}>
+              <option value="gryphline" ${state.loginProvider === "gryphline" ? "selected" : ""}>${escapeHtml(tr.importLoginServerGlobal)}</option>
+              <option value="hypergryph" ${state.loginProvider === "hypergryph" ? "selected" : ""}>${escapeHtml(tr.importLoginServerCn)}</option>
+            </select>
+          </div>
+          <button id="btn-official-login" class="btn-sync btn-block" ${state.busy ? "disabled" : ""}>${escapeHtml(tr.importLoginBtn)}</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="tui-panel">
         <legend class="tui-legend">${escapeHtml(tr.importLogTitle)}</legend>
         <div class="form-stack">
           <div class="c-muted">${escapeHtml(tr.importLogDesc)}</div>
@@ -1103,8 +1122,71 @@ function bindEvents(): void {
 
   document.getElementById("btn-sync")?.addEventListener("click", async () => {
     const acc = getActiveAccount();
-    if (!acc?.u8Token) return;
-    await runSyncWithInput(acc.u8Token, acc.provider, acc.serverId);
+    if (!acc) return;
+    let token = acc.u8Token || "";
+    if (acc.loginToken) {
+      const refreshed = await refreshU8TokenFromLoginToken(acc.loginToken, acc.uid, acc.provider).catch(() => null);
+      if (refreshed) {
+        token = refreshed;
+        acc.u8Token = refreshed;
+        await saveAppStore(state.store);
+      }
+    }
+    if (!token) return;
+    await runSyncWithInput(token, acc.provider, acc.serverId);
+  });
+
+  document.getElementById("login-provider-select")?.addEventListener("change", (e) => {
+    state.loginProvider = (e.target as HTMLSelectElement).value as Provider;
+  });
+
+  document.getElementById("btn-official-login")?.addEventListener("click", async () => {
+    const tr = getTr();
+    const locale = state.store.locale || "zh-TW";
+    state.busy = true;
+    setStatus(tr.statusWaitingLogin);
+    render();
+    try {
+      const loginToken = await openOfficialLoginWindow(state.loginProvider, locale);
+      if (!loginToken) {
+        setStatus(tr.statusLoginCancelled);
+        return;
+      }
+      setStatus(tr.statusExchangingToken);
+      render();
+      const accounts = await exchangeLoginTokenToAccounts(loginToken, state.loginProvider, locale);
+      let totalAddedChar = 0;
+      let totalAddedWeapon = 0;
+      for (const acc of accounts) {
+        const idx = state.store.accounts.findIndex((a) => a.key === acc.key);
+        if (idx >= 0) state.store.accounts[idx] = { ...state.store.accounts[idx], ...acc };
+        else state.store.accounts.push(acc);
+        state.store.activeAccountKey = acc.key;
+
+        const existing = state.store.records[acc.key] || { char: {}, weapon: {} };
+        const result = await syncAccountGacha(
+          acc,
+          existing,
+          state.store.poolInfo,
+          (msg) => setStatus(msg),
+          getApiLang(locale),
+          locale,
+        );
+        state.store.records[acc.key] = result.records;
+        state.store.poolInfo = result.poolInfo;
+        totalAddedChar += result.addedChar;
+        totalAddedWeapon += result.addedWeapon;
+      }
+      await saveAppStore(state.store);
+      state.tab = "char";
+      state.selectedPoolId = "";
+      setStatus(tr.statusSyncDone(totalAddedChar, totalAddedWeapon));
+    } catch (err: any) {
+      setStatus(tr.statusError(err?.message || String(err)), true);
+    } finally {
+      state.busy = false;
+      render();
+    }
   });
 
   document.getElementById("btn-export")?.addEventListener("click", exportActiveJson);

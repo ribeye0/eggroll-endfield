@@ -11,6 +11,7 @@ export interface AccountInfo {
   serverName: string;
   provider: Provider;
   u8Token?: string;
+  loginToken?: string;
 }
 
 export interface CharRecord {

@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use tauri::Manager;
+use std::thread;
+use std::time::Duration;
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -414,11 +416,151 @@ fn export_binary_file(
     Ok(Some(path.display().to_string()))
 }
 
+#[tauri::command]
+async fn open_login_window(app: tauri::AppHandle, provider: Option<String>) -> Result<(), String> {
+    let provider = provider.unwrap_or_else(|| "gryphline".to_string());
+    let label = format!("hg-login-{}", provider);
+    let (login_url, auth_url_match, poll_url, title) = match provider.as_str() {
+        "hypergryph" => (
+            "https://user.hypergryph.com/",
+            "as.hypergryph.com/user/auth",
+            "https://web-api.hypergryph.com/account/info/hg",
+            "EggRoll - Hypergryph Login",
+        ),
+        _ => (
+            "https://user.gryphline.com/",
+            "as.gryphline.com/user/auth",
+            "https://web-api.gryphline.com/cookie_store/account_token",
+            "EggRoll - Gryphline Login",
+        ),
+    };
+
+    if let Some(win) = app.get_webview_window(&label) {
+        let _ = win.set_focus();
+        return Ok(());
+    }
+
+    let script = r#"
+      (function() {
+        var hasSent = false;
+        function sendToken(token) {
+          if (hasSent || !token) return;
+          hasSent = true;
+          window.location.replace("http://tauri.localhost/login_success?token=" + encodeURIComponent(token));
+        }
+
+        var originalOpen = XMLHttpRequest.prototype.open;
+        var originalSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function(method, url) {
+          this._url = url;
+          return originalOpen.apply(this, arguments);
+        };
+        XMLHttpRequest.prototype.send = function() {
+          this.addEventListener('load', function() {
+            try {
+              if (this._url && this._url.includes('__AUTH_URL_MATCH__')) {
+                var res = JSON.parse(this.responseText);
+                if (res.status === 0 && res.data && res.data.token) {
+                  sendToken(res.data.token);
+                }
+              }
+            } catch (e) {}
+          });
+          return originalSend.apply(this, arguments);
+        };
+
+        var originalFetch = window.fetch;
+        window.fetch = async function(...args) {
+          const response = await originalFetch(...args);
+          try {
+            const url = response.url;
+            if (url && url.includes('__AUTH_URL_MATCH__')) {
+              const clone = response.clone();
+              clone.json().then(data => {
+                if (data.status === 0 && data.data && data.data.token) {
+                  sendToken(data.data.token);
+                }
+              }).catch(function() {});
+            }
+          } catch (e) {}
+          return response;
+        };
+
+        var timer = setInterval(function() {
+          if (hasSent) { clearInterval(timer); return; }
+          fetch("__POLL_URL__", {
+            method: "GET",
+            credentials: "include"
+          })
+          .then(function(res) { return res.json(); })
+          .then(function(data) {
+            if (data && data.code === 0 && data.data && data.data.content) {
+              sendToken(data.data.content);
+              clearInterval(timer);
+            }
+          })
+          .catch(function() {});
+        }, 1500);
+      })();
+    "#
+    .replace("__AUTH_URL_MATCH__", auth_url_match)
+    .replace("__POLL_URL__", poll_url);
+
+    let app_handle_for_nav = app.clone();
+    let app_handle_for_event = app.clone();
+    let label_for_close = label.clone();
+
+    let parsed_url: tauri::Url = login_url
+        .parse()
+        .map_err(|e| format!("無效的登入網址: {e}"))?;
+
+    let win_builder = WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(parsed_url))
+        .title(title)
+        .inner_size(500.0, 720.0)
+        .resizable(true)
+        .initialization_script(script)
+        .on_navigation(move |url| {
+            let url_str = url.as_str();
+            if url_str.starts_with("http://tauri.localhost/login_success") {
+                if let Some(token) = url
+                    .query_pairs()
+                    .find(|(k, _)| k == "token")
+                    .map(|(_, v)| v.into_owned())
+                {
+                    let _ = app_handle_for_nav.emit("hg-login-success", token);
+                    let app_clone = app_handle_for_nav.clone();
+                    let label_clone = label_for_close.clone();
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(350));
+                        if let Some(win) = app_clone.get_webview_window(&label_clone) {
+                            let _ = win.close();
+                        }
+                    });
+                }
+                return false;
+            }
+            true
+        });
+
+    let win = win_builder
+        .build()
+        .map_err(|e| format!("無法開啟官方登入視窗: {e}"))?;
+    let _ = win.clear_all_browsing_data();
+    win.on_window_event(move |event| {
+        if let WindowEvent::Destroyed = event {
+            let _ = app_handle_for_event.emit("hg-login-closed", ());
+        }
+    });
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             detect_gacha_log,
+            open_login_window,
             http_get_json,
             http_post_json,
             load_store,
