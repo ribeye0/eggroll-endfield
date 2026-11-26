@@ -1,5 +1,13 @@
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -14,288 +22,13 @@ const GITHUB_RELEASES_LATEST_URL: &str =
 const GITHUB_RELEASES_PAGE_URL: &str =
     "https://github.com/ribeye0/eggroll-endfield/releases";
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LogDetectionResult {
-    pub url: String,
-    pub provider: String,
-    pub path: String,
-}
-
-fn get_store_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn get_store_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let base = dirs::config_dir()
         .or_else(|| app.path().app_config_dir().ok())
         .ok_or_else(|| "無法取得設定目錄".to_string())?;
     let dir = base.join("eggroll");
     fs::create_dir_all(&dir).map_err(|e| format!("無法建立設定目錄: {e}"))?;
-    Ok(dir.join("store.json"))
-}
-
-fn extract_gacha_url_from_content(content: &str, provider_hint: Option<&str>) -> Option<(String, String)> {
-    let providers: Vec<&str> = match provider_hint {
-        Some("hypergryph") => vec!["hypergryph"],
-        Some("gryphline") => vec!["gryphline"],
-        _ => vec!["hypergryph", "gryphline"],
-    };
-
-    for line in content.lines().rev() {
-        for &prov in &providers {
-            let prefix = format!("https://ef-webview.{prov}.com/page/gacha_");
-            if let Some(start) = line.find(&prefix) {
-                let rest = &line[start..];
-                let end = rest
-                    .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '>' || c == ')')
-                    .unwrap_or(rest.len());
-                let url = rest[..end].trim().to_string();
-                if !url.is_empty() {
-                    return Some((url, prov.to_string()));
-                }
-            }
-        }
-    }
-    None
-}
-
-fn candidate_log_paths(provider_hint: Option<&str>) -> Vec<(String, PathBuf)> {
-    let mut paths = Vec::new();
-    let Some(home) = dirs::home_dir() else {
-        return paths;
-    };
-
-    let include_cn = provider_hint.is_none() || provider_hint == Some("hypergryph");
-    let include_global = provider_hint.is_none() || provider_hint == Some("gryphline");
-
-    if include_cn {
-        paths.push((
-            "hypergryph".to_string(),
-            home.join("AppData/LocalLow/Hypergryph/Endfield/sdklogs/HGWebview.log"),
-        ));
-    }
-    if include_global {
-        paths.push((
-            "gryphline".to_string(),
-            home.join("AppData/LocalLow/Gryphline/Endfield/sdklogs/HGWebview.log"),
-        ));
-    }
-    paths
-}
-
-fn is_token_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'_' | b'-')
-}
-
-fn percent_encode_token(token: &str) -> String {
-    let mut out = String::with_capacity(token.len());
-    for ch in token.chars() {
-        match ch {
-            '+' => out.push_str("%2B"),
-            '/' => out.push_str("%2F"),
-            '=' => out.push_str("%3D"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-fn extract_u8_token_from_session_bytes(
-    data: &[u8],
-    provider_hint: Option<&str>,
-) -> Option<(String, String)> {
-    let needle_prefix = b"map-";
-    let needle_suffix = b"-u8_token";
-    let mut last_match: Option<(String, String)> = None;
-
-    let mut i = 0;
-    while i + needle_prefix.len() + needle_suffix.len() < data.len() {
-        if &data[i..i + needle_prefix.len()] == needle_prefix {
-            let mut j = i + needle_prefix.len();
-            while j < data.len() && data[j].is_ascii_digit() {
-                j += 1;
-            }
-            if j > i + needle_prefix.len()
-                && j + needle_suffix.len() <= data.len()
-                && &data[j..j + needle_suffix.len()] == needle_suffix
-            {
-                let val_start_search = j + needle_suffix.len();
-                let search_end = (val_start_search + 6).min(data.len());
-                let mut k = val_start_search;
-                while k + 1 < search_end {
-                    if is_token_byte(data[k]) && data[k + 1] == 0 {
-                        break;
-                    }
-                    k += 1;
-                }
-                if k + 1 < search_end && is_token_byte(data[k]) && data[k + 1] == 0 {
-                    let mut token = String::new();
-                    let mut p = k;
-                    while p + 1 < data.len() && is_token_byte(data[p]) && data[p + 1] == 0 {
-                        token.push(data[p] as char);
-                        p += 2;
-                    }
-                    if token.len() >= 32 {
-                        let ctx_start = i.saturating_sub(512);
-                        let ctx = String::from_utf8_lossy(&data[ctx_start..i]);
-                        let prov = if ctx.contains("hypergryph.com") {
-                            "hypergryph"
-                        } else if ctx.contains("gryphline.com") {
-                            "gryphline"
-                        } else {
-                            provider_hint.unwrap_or("gryphline")
-                        };
-                        let url = format!(
-                            "https://ef-webview.{prov}.com/page/gacha_char?u8_token={}",
-                            percent_encode_token(&token)
-                        );
-                        last_match = Some((url, prov.to_string()));
-                    }
-                    i = p;
-                    continue;
-                }
-            }
-        }
-        i += 1;
-    }
-
-    last_match
-}
-
-fn find_session_storage_dir_from_path(path: &std::path::Path) -> Option<PathBuf> {
-    if path.is_dir() && path.file_name().and_then(|n| n.to_str()) == Some("Session Storage") {
-        return Some(path.to_path_buf());
-    }
-    let mut cur = if path.is_dir() {
-        Some(path)
-    } else {
-        path.parent()
-    };
-    for _ in 0..6 {
-        let Some(dir) = cur else { break };
-        if dir.file_name().and_then(|n| n.to_str()) == Some("Session Storage") {
-            return Some(dir.to_path_buf());
-        }
-        let candidate = dir.join("Local/PlatformProcess/QtWebEngine/Default/Session Storage");
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-        let candidate_appdata =
-            dir.join("AppData/Local/PlatformProcess/QtWebEngine/Default/Session Storage");
-        if candidate_appdata.is_dir() {
-            return Some(candidate_appdata);
-        }
-        cur = dir.parent();
-    }
-    None
-}
-
-fn extract_from_session_storage_dir(
-    dir: &std::path::Path,
-    provider_hint: Option<&str>,
-) -> Option<LogDetectionResult> {
-    let entries = fs::read_dir(dir).ok()?;
-    let mut files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
-    for entry in entries.flatten() {
-        let p = entry.path();
-        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext == "log" || ext == "ldb" {
-            let mtime = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::UNIX_EPOCH);
-            files.push((mtime, p));
-        }
-    }
-    files.sort_by(|a, b| b.0.cmp(&a.0));
-
-    for (_, p) in files {
-        if let Ok(bytes) = fs::read(&p) {
-            if let Some((url, prov)) = extract_u8_token_from_session_bytes(&bytes, provider_hint) {
-                return Some(LogDetectionResult {
-                    url,
-                    provider: prov,
-                    path: p.display().to_string(),
-                });
-            }
-        }
-    }
-    None
-}
-
-#[tauri::command]
-fn detect_gacha_log(
-    provider: Option<String>,
-    custom_path: Option<String>,
-) -> Result<LogDetectionResult, String> {
-    if let Some(raw_path) = custom_path {
-        let trimmed = raw_path.trim();
-        if !trimmed.is_empty() {
-            let path = PathBuf::from(trimmed);
-            if path.is_file() {
-                let bytes = fs::read(&path)
-                    .map_err(|e| format!("讀取指定日誌失敗 ({}): {e}", path.display()))?;
-                let content = String::from_utf8_lossy(&bytes);
-                if let Some((url, prov)) =
-                    extract_gacha_url_from_content(&content, provider.as_deref())
-                {
-                    return Ok(LogDetectionResult {
-                        url,
-                        provider: prov,
-                        path: path.display().to_string(),
-                    });
-                }
-                if let Some((url, prov)) =
-                    extract_u8_token_from_session_bytes(&bytes, provider.as_deref())
-                {
-                    return Ok(LogDetectionResult {
-                        url,
-                        provider: prov,
-                        path: path.display().to_string(),
-                    });
-                }
-            }
-            if path.is_dir() {
-                if let Some(res) = extract_from_session_storage_dir(&path, provider.as_deref()) {
-                    return Ok(res);
-                }
-            }
-            if let Some(ss_dir) = find_session_storage_dir_from_path(&path) {
-                if let Some(res) = extract_from_session_storage_dir(&ss_dir, provider.as_deref()) {
-                    return Ok(res);
-                }
-            }
-            return Err(
-                "指定日誌與鄰近 QtWebEngine Session Storage 中未找到抽卡連結或 u8_token，請先在遊戲內打開一次尋訪紀錄頁面。"
-                    .to_string(),
-            );
-        }
-    }
-
-    let candidates = candidate_log_paths(provider.as_deref());
-    for (prov, path) in &candidates {
-        if path.exists() {
-            if let Ok(bytes) = fs::read(path) {
-                let content = String::from_utf8_lossy(&bytes);
-                if let Some((url, detected_prov)) =
-                    extract_gacha_url_from_content(&content, Some(prov))
-                {
-                    return Ok(LogDetectionResult {
-                        url,
-                        provider: detected_prov,
-                        path: path.display().to_string(),
-                    });
-                }
-            }
-        }
-    }
-
-    if let Some(home) = dirs::home_dir() {
-        let ss_dir = home.join("AppData/Local/PlatformProcess/QtWebEngine/Default/Session Storage");
-        if ss_dir.is_dir() {
-            if let Some(res) = extract_from_session_storage_dir(&ss_dir, provider.as_deref()) {
-                return Ok(res);
-            }
-        }
-    }
-
-    Err("未在預設遊戲日誌路徑找到抽卡連結。若使用非 Windows 系統或自訂路徑，請手動指定 HGWebview.log 路徑，或直接貼上抽卡連結 / Token。".to_string())
+    Ok(dir)
 }
 
 #[tauri::command]
@@ -358,6 +91,7 @@ pub struct UpdateCheckResult {
     pub release_url: String,
     pub asset_name: Option<String>,
     pub download_url: Option<String>,
+    pub checksum_url: Option<String>,
     pub asset_size: Option<u64>,
 }
 
@@ -430,6 +164,74 @@ fn select_release_asset_for_os<'a>(
     }
 }
 
+fn select_checksum_asset<'a>(
+    assets: &'a [GithubAsset],
+    asset_name: &str,
+) -> Option<&'a GithubAsset> {
+    let expected_sidecar = format!("{}.sha256", asset_name.to_ascii_lowercase());
+    assets
+        .iter()
+        .find(|a| a.name.to_ascii_lowercase() == expected_sidecar)
+        .or_else(|| {
+            assets.iter().find(|a| {
+                let n = a.name.to_ascii_lowercase();
+                n == "sha256sums.txt" || n == "sha256sums"
+            })
+        })
+}
+
+fn is_hex_sha256(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn parse_sha256_for_asset(content: &str, asset_name: &str) -> Option<String> {
+    let target = asset_name.trim().to_ascii_lowercase();
+    let lines: Vec<&str> = content
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+
+    for line in &lines {
+        let mut parts = line.split_whitespace();
+        let Some(hash_part) = parts.next() else {
+            continue;
+        };
+        if !is_hex_sha256(hash_part) {
+            continue;
+        }
+        if let Some(file_part) = parts.next() {
+            let clean_file = file_part
+                .trim_start_matches('*')
+                .rsplit('/')
+                .next()
+                .unwrap_or(file_part)
+                .to_ascii_lowercase();
+            if clean_file == target {
+                return Some(hash_part.to_ascii_lowercase());
+            }
+        }
+    }
+
+    if lines.len() == 1 {
+        let single = lines[0].split_whitespace().next().unwrap_or("");
+        if is_hex_sha256(single) {
+            return Some(single.to_ascii_lowercase());
+        }
+    }
+    None
+}
+
+fn to_hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
 #[tauri::command]
 async fn check_app_update() -> Result<UpdateCheckResult, String> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
@@ -455,6 +257,7 @@ async fn check_app_update() -> Result<UpdateCheckResult, String> {
             release_url: GITHUB_RELEASES_PAGE_URL.to_string(),
             asset_name: None,
             download_url: None,
+            checksum_url: None,
             asset_size: None,
         });
     }
@@ -476,6 +279,7 @@ async fn check_app_update() -> Result<UpdateCheckResult, String> {
     let has_update = compare_semver(&latest_version, &current_version) == Ordering::Greater;
     let assets = release.assets.unwrap_or_default();
     let picked = select_release_asset_for_os(&assets, std::env::consts::OS);
+    let checksum = picked.and_then(|a| select_checksum_asset(&assets, &a.name));
 
     Ok(UpdateCheckResult {
         current_version,
@@ -487,6 +291,7 @@ async fn check_app_update() -> Result<UpdateCheckResult, String> {
             .unwrap_or_else(|| GITHUB_RELEASES_PAGE_URL.to_string()),
         asset_name: picked.map(|a| a.name.clone()),
         download_url: picked.map(|a| a.browser_download_url.clone()),
+        checksum_url: checksum.map(|a| a.browser_download_url.clone()),
         asset_size: picked.map(|a| a.size),
     })
 }
@@ -496,11 +301,17 @@ async fn download_app_update(
     app: tauri::AppHandle,
     url: String,
     asset_name: String,
+    checksum_url: Option<String>,
 ) -> Result<String, String> {
-    let base = dirs::config_dir()
-        .or_else(|| app.path().app_config_dir().ok())
-        .ok_or_else(|| "無法取得設定目錄".to_string())?;
-    let updates_dir = base.join("eggroll").join("updates");
+    if !url.starts_with("https://") {
+        return Err("更新下載連結必須使用 HTTPS".to_string());
+    }
+    let checksum_url = checksum_url
+        .filter(|u| u.starts_with("https://"))
+        .ok_or_else(|| "此版本未提供 SHA-256 校驗檔，已基於安全性中止自動下載，請前往 Releases 頁面確認".to_string())?;
+
+    let dir = get_store_dir(&app)?;
+    let updates_dir = dir.join("updates");
     fs::create_dir_all(&updates_dir).map_err(|e| format!("無法建立更新暫存目錄: {e}"))?;
 
     let safe_name = sanitize_filename(&asset_name);
@@ -511,6 +322,22 @@ async fn download_app_update(
         .timeout(Duration::from_secs(300))
         .build()
         .map_err(|e| format!("建立下載連線失敗: {e}"))?;
+
+    let checksum_resp = client
+        .get(&checksum_url)
+        .header("User-Agent", "EggRoll-Updater")
+        .send()
+        .await
+        .map_err(|e| format!("下載 SHA-256 校驗檔失敗: {e}"))?;
+    if !checksum_resp.status().is_success() {
+        return Err(format!("下載 SHA-256 校驗檔失敗: HTTP {}", checksum_resp.status()));
+    }
+    let checksum_text = checksum_resp
+        .text()
+        .await
+        .map_err(|e| format!("讀取 SHA-256 校驗檔失敗: {e}"))?;
+    let expected_sha256 = parse_sha256_for_asset(&checksum_text, &asset_name)
+        .ok_or_else(|| format!("校驗檔中找不到 {asset_name} 的 SHA-256 雜湊值"))?;
 
     let mut resp = client
         .get(&url)
@@ -525,6 +352,7 @@ async fn download_app_update(
 
     let total = resp.content_length();
     let mut file = fs::File::create(&part_path).map_err(|e| format!("建立暫存檔失敗: {e}"))?;
+    let mut hasher = Sha256::new();
     let mut downloaded: u64 = 0;
     let mut last_emit: u64 = 0;
 
@@ -542,6 +370,7 @@ async fn download_app_update(
         .await
         .map_err(|e| format!("讀取更新檔案失敗: {e}"))?
     {
+        hasher.update(&chunk);
         file.write_all(&chunk)
             .map_err(|e| format!("寫入更新檔案失敗: {e}"))?;
         downloaded += chunk.len() as u64;
@@ -567,6 +396,16 @@ async fn download_app_update(
 
     file.flush().map_err(|e| format!("刷新更新檔案失敗: {e}"))?;
     drop(file);
+
+    let actual_sha256 = to_hex_lower(&hasher.finalize());
+    if actual_sha256 != expected_sha256 {
+        let _ = fs::remove_file(&part_path);
+        return Err(format!(
+            "更新檔 SHA-256 校驗失敗（預期 {}，實際 {}），已中止並刪除可疑檔案",
+            &expected_sha256[..12],
+            &actual_sha256[..12]
+        ));
+    }
 
     if final_path.exists() {
         let _ = fs::remove_file(&final_path);
@@ -667,14 +506,244 @@ fn install_app_update(app: tauri::AppHandle, downloaded_path: String) -> Result<
     Err("目前作業系統不支援自動套用更新，請手動開啟下載檔案".to_string())
 }
 
+const KEYRING_SERVICE: &str = "eggroll-endfield";
+const KEYRING_USER: &str = "master-key";
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AccountTokens {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    u8_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    login_token: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SecretEnvelope {
+    v: u8,
+    n: String,
+    c: String,
+}
+
+fn write_owner_only_file(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(content)?;
+        f.sync_all()?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, content)
+    }
+}
+
+fn decode_key_32(b64: &str) -> Option<[u8; 32]> {
+    let bytes = BASE64.decode(b64.trim()).ok()?;
+    if bytes.len() != 32 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&bytes);
+    Some(key)
+}
+
+fn get_or_create_master_key(dir: &Path) -> Result<[u8; 32], String> {
+    let fallback_path = dir.join(".key");
+
+    // 若先前已建立本機備援金鑰，優先沿用以確保可解密既有 secrets.enc
+    if fallback_path.exists() {
+        if let Ok(raw) = fs::read_to_string(&fallback_path) {
+            if let Some(key) = decode_key_32(&raw) {
+                return Ok(key);
+            }
+        }
+    }
+
+    // 優先使用作業系統憑證庫（Windows Credential Manager / Linux Secret Service）
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+        if let Ok(existing) = entry.get_password() {
+            if let Some(key) = decode_key_32(&existing) {
+                return Ok(key);
+            }
+        }
+        let mut new_key = [0u8; 32];
+        OsRng.fill_bytes(&mut new_key);
+        let b64 = BASE64.encode(new_key);
+        if entry.set_password(&b64).is_ok() {
+            return Ok(new_key);
+        }
+    }
+
+    // 備援：無可用系統憑證庫時，以 0600 權限寫入隨機金鑰檔
+    let mut new_key = [0u8; 32];
+    OsRng.fill_bytes(&mut new_key);
+    let b64 = BASE64.encode(new_key);
+    write_owner_only_file(&fallback_path, b64.as_bytes())
+        .map_err(|e| format!("寫入備援金鑰失敗: {e}"))?;
+    Ok(new_key)
+}
+
+fn encrypt_secrets(
+    key: &[u8; 32],
+    tokens: &HashMap<String, AccountTokens>,
+) -> Result<String, String> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("初始化加密器失敗: {e}"))?;
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let plaintext = serde_json::to_vec(tokens).map_err(|e| format!("序列化憑證失敗: {e}"))?;
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| format!("加密憑證失敗: {e}"))?;
+    let env = SecretEnvelope {
+        v: 1,
+        n: BASE64.encode(nonce_bytes),
+        c: BASE64.encode(ciphertext),
+    };
+    serde_json::to_string(&env).map_err(|e| format!("封裝密文失敗: {e}"))
+}
+
+fn decrypt_secrets(key: &[u8; 32], raw: &str) -> Result<HashMap<String, AccountTokens>, String> {
+    let env: SecretEnvelope =
+        serde_json::from_str(raw).map_err(|e| format!("解析加密憑證格式失敗: {e}"))?;
+    if env.v != 1 {
+        return Err(format!("不支援的憑證加密版本: {}", env.v));
+    }
+    let nonce_bytes = BASE64
+        .decode(env.n.trim())
+        .map_err(|e| format!("解碼 nonce 失敗: {e}"))?;
+    if nonce_bytes.len() != 12 {
+        return Err("憑證 nonce 長度錯誤".to_string());
+    }
+    let ciphertext = BASE64
+        .decode(env.c.trim())
+        .map_err(|e| format!("解碼密文失敗: {e}"))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("初始化解密器失敗: {e}"))?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref())
+        .map_err(|_| "解密憑證失敗（金鑰不符或資料已損毀）".to_string())?;
+    serde_json::from_slice(&plaintext).map_err(|e| format!("反序列化憑證失敗: {e}"))
+}
+
+fn extract_and_strip_tokens(data: &mut serde_json::Value) -> HashMap<String, AccountTokens> {
+    let mut map = HashMap::new();
+    let Some(accounts) = data.get_mut("accounts").and_then(|v| v.as_array_mut()) else {
+        return map;
+    };
+    for acc in accounts {
+        let Some(obj) = acc.as_object_mut() else {
+            continue;
+        };
+        let key = obj
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let u8_token = obj
+            .remove("u8Token")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .filter(|s| !s.is_empty());
+        let login_token = obj
+            .remove("loginToken")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .filter(|s| !s.is_empty());
+        if !key.is_empty() && (u8_token.is_some() || login_token.is_some()) {
+            map.insert(
+                key,
+                AccountTokens {
+                    u8_token,
+                    login_token,
+                },
+            );
+        }
+    }
+    map
+}
+
+fn inject_tokens(data: &mut serde_json::Value, tokens: &HashMap<String, AccountTokens>) {
+    let Some(accounts) = data.get_mut("accounts").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    for acc in accounts {
+        let Some(obj) = acc.as_object_mut() else {
+            continue;
+        };
+        let Some(key) = obj.get("key").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
+            continue;
+        };
+        if let Some(tok) = tokens.get(&key) {
+            if let Some(u8t) = &tok.u8_token {
+                obj.insert("u8Token".to_string(), serde_json::Value::String(u8t.clone()));
+            }
+            if let Some(lt) = &tok.login_token {
+                obj.insert(
+                    "loginToken".to_string(),
+                    serde_json::Value::String(lt.clone()),
+                );
+            }
+        }
+    }
+}
+
+fn save_encrypted_tokens(dir: &Path, tokens: &HashMap<String, AccountTokens>) -> Result<(), String> {
+    let secrets_path = dir.join("secrets.enc");
+    if tokens.is_empty() {
+        if secrets_path.exists() {
+            let _ = fs::remove_file(&secrets_path);
+        }
+        return Ok(());
+    }
+    let key = get_or_create_master_key(dir)?;
+    let encrypted = encrypt_secrets(&key, tokens)?;
+    let tmp_path = dir.join("secrets.enc.tmp");
+    write_owner_only_file(&tmp_path, encrypted.as_bytes())
+        .map_err(|e| format!("寫入加密憑證暫存檔失敗: {e}"))?;
+    fs::rename(&tmp_path, &secrets_path).map_err(|e| format!("更新加密憑證失敗: {e}"))?;
+    Ok(())
+}
+
+fn load_encrypted_tokens(dir: &Path) -> HashMap<String, AccountTokens> {
+    let secrets_path = dir.join("secrets.enc");
+    if !secrets_path.exists() {
+        return HashMap::new();
+    }
+    let Ok(raw) = fs::read_to_string(&secrets_path) else {
+        return HashMap::new();
+    };
+    let Ok(key) = get_or_create_master_key(dir) else {
+        return HashMap::new();
+    };
+    decrypt_secrets(&key, &raw).unwrap_or_default()
+}
+
+fn write_store_json_atomic(path: &Path, data: &serde_json::Value) -> Result<(), String> {
+    let tmp_path = path.with_extension("json.tmp");
+    let json = serde_json::to_string_pretty(data).map_err(|e| format!("序列化失敗: {e}"))?;
+    fs::write(&tmp_path, json).map_err(|e| format!("寫入暫存檔失敗: {e}"))?;
+    fs::rename(&tmp_path, path).map_err(|e| format!("更新本機資料失敗: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn load_store(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let path = get_store_path(&app)?;
+    let dir = get_store_dir(&app)?;
+    let path = dir.join("store.json");
+    let mut migrated_from_legacy = false;
     if !path.exists() {
         if let Ok(legacy_dir) = app.path().app_data_dir() {
             let legacy_path = legacy_dir.join("store.json");
             if legacy_path.exists() {
-                let _ = fs::copy(&legacy_path, &path);
+                if fs::copy(&legacy_path, &path).is_ok() {
+                    migrated_from_legacy = true;
+                }
             }
         }
     }
@@ -682,17 +751,47 @@ fn load_store(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         return Ok(serde_json::json!(null));
     }
     let content = fs::read_to_string(&path).map_err(|e| format!("讀取本機資料失敗: {e}"))?;
-    serde_json::from_str(&content).map_err(|e| format!("解析本機資料失敗: {e}"))
+    let mut data: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("解析本機資料失敗: {e}"))?;
+
+    let mut tokens = load_encrypted_tokens(&dir);
+    let legacy_tokens = extract_and_strip_tokens(&mut data);
+    if !legacy_tokens.is_empty() {
+        for (k, v) in legacy_tokens {
+            let entry = tokens.entry(k).or_default();
+            if entry.u8_token.is_none() {
+                entry.u8_token = v.u8_token;
+            }
+            if entry.login_token.is_none() {
+                entry.login_token = v.login_token;
+            }
+        }
+        // 遷移至加密檔案並從 store.json 抹除舊版明文憑證
+        save_encrypted_tokens(&dir, &tokens)?;
+        write_store_json_atomic(&path, &data)?;
+    }
+
+    // 若是由舊版 app_data_dir 遷移而來，確保舊路徑不殘留明文 Token
+    if migrated_from_legacy {
+        if let Ok(legacy_dir) = app.path().app_data_dir() {
+            let legacy_path = legacy_dir.join("store.json");
+            if legacy_path.exists() {
+                let _ = write_store_json_atomic(&legacy_path, &data);
+            }
+        }
+    }
+
+    inject_tokens(&mut data, &tokens);
+    Ok(data)
 }
 
 #[tauri::command]
-fn save_store(app: tauri::AppHandle, data: serde_json::Value) -> Result<(), String> {
-    let path = get_store_path(&app)?;
-    let tmp_path = path.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(&data).map_err(|e| format!("序列化失敗: {e}"))?;
-    fs::write(&tmp_path, json).map_err(|e| format!("寫入暫存檔失敗: {e}"))?;
-    fs::rename(&tmp_path, &path).map_err(|e| format!("更新本機資料失敗: {e}"))?;
-    Ok(())
+fn save_store(app: tauri::AppHandle, mut data: serde_json::Value) -> Result<(), String> {
+    let dir = get_store_dir(&app)?;
+    let path = dir.join("store.json");
+    let tokens = extract_and_strip_tokens(&mut data);
+    save_encrypted_tokens(&dir, &tokens)?;
+    write_store_json_atomic(&path, &data)
 }
 
 fn sanitize_filename(filename: &str) -> String {
@@ -893,7 +992,6 @@ async fn open_login_window(app: tauri::AppHandle, provider: Option<String>) -> R
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            detect_gacha_log,
             open_login_window,
             http_get_json,
             http_post_json,
@@ -912,27 +1010,6 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn extracts_latest_u8_token_from_session_storage_bytes() {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(b"namespace-abc-https://ef-webview.gryphline.com/\x00");
-        buf.extend_from_slice(b"map-13-u8_token\xd0\t");
-        let fake_token = "AbCdEf0123456789+GhIjKlMnOpQrStUvWxYz/==";
-        for b in fake_token.bytes() {
-            buf.push(b);
-            buf.push(0);
-        }
-        buf.extend_from_slice(b"\x00\x05map-13-u8_token\x00'map-13-version");
-
-        let (url, prov) =
-            extract_u8_token_from_session_bytes(&buf, Some("gryphline")).expect("should extract");
-        assert_eq!(prov, "gryphline");
-        assert_eq!(
-            url,
-            "https://ef-webview.gryphline.com/page/gacha_char?u8_token=AbCdEf0123456789%2BGhIjKlMnOpQrStUvWxYz%2F%3D%3D"
-        );
-    }
 
     #[test]
     fn compares_semver_versions_correctly() {
@@ -964,5 +1041,65 @@ mod tests {
             select_release_asset_for_os(&assets, "windows").map(|a| a.name.as_str()),
             Some("EggRoll-0.2.0-windows-x64.exe")
         );
+    }
+
+    #[test]
+    fn encrypt_and_decrypt_secrets_roundtrip() {
+        let mut key = [0u8; 32];
+        OsRng.fill_bytes(&mut key);
+        let mut map = HashMap::new();
+        map.insert(
+            "global_2_123".to_string(),
+            AccountTokens {
+                u8_token: Some("u8-secret-abc".to_string()),
+                login_token: Some("login-secret-xyz".to_string()),
+            },
+        );
+        let enc = encrypt_secrets(&key, &map).expect("encrypt ok");
+        assert!(!enc.contains("u8-secret-abc"));
+        assert!(!enc.contains("login-secret-xyz"));
+        let dec = decrypt_secrets(&key, &enc).expect("decrypt ok");
+        assert_eq!(dec, map);
+
+        let wrong_key = [1u8; 32];
+        assert!(decrypt_secrets(&wrong_key, &enc).is_err());
+    }
+
+    #[test]
+    fn parses_sha256_for_asset_in_both_formats() {
+        let h1 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let h2 = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        let sums = format!("{h1}  EggRoll_0.1.3_amd64.AppImage\n{h2} *EggRoll_0.1.3_x64.exe\n");
+        assert_eq!(
+            parse_sha256_for_asset(&sums, "EggRoll_0.1.3_x64.exe").as_deref(),
+            Some(h2)
+        );
+        assert_eq!(
+            parse_sha256_for_asset(h1, "EggRoll_0.1.3_amd64.AppImage").as_deref(),
+            Some(h1)
+        );
+        assert!(parse_sha256_for_asset(&sums, "other.exe").is_none());
+    }
+
+    #[test]
+    fn strips_and_restores_tokens_in_store_json() {
+        let mut store = serde_json::json!({
+            "accounts": [
+                {
+                    "key": "global_2_123",
+                    "nickName": "Tester",
+                    "u8Token": "u8-tok",
+                    "loginToken": "login-tok"
+                }
+            ]
+        });
+        let extracted = extract_and_strip_tokens(&mut store);
+        assert_eq!(extracted.len(), 1);
+        assert!(store["accounts"][0].get("u8Token").is_none());
+        assert!(store["accounts"][0].get("loginToken").is_none());
+
+        inject_tokens(&mut store, &extracted);
+        assert_eq!(store["accounts"][0]["u8Token"], "u8-tok");
+        assert_eq!(store["accounts"][0]["loginToken"], "login-tok");
     }
 }

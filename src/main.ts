@@ -36,7 +36,6 @@ import {
 } from "./gachaCalc";
 import {
   checkAppUpdate,
-  detectGachaLog,
   downloadAppUpdate,
   exchangeLoginTokenToAccounts,
   exportBinaryToFile,
@@ -44,7 +43,6 @@ import {
   installAppUpdate,
   loadAppStore,
   openOfficialLoginWindow,
-  parseGachaUrlOrToken,
   queryAccountFromToken,
   refreshU8TokenFromLoginToken,
   saveAppStore,
@@ -106,10 +104,6 @@ const state = {
   statusError: false,
   logProvider: "gryphline" as Provider,
   loginProvider: "gryphline" as Provider,
-  customLogPath: "",
-  urlInput: "",
-  manualProvider: "gryphline" as Provider,
-  manualServerId: "auto",
   imgModalOpen: false,
   imgFormat: "png" as ImageFormat,
   imgScale: 2 as UpscaleFactor,
@@ -859,32 +853,6 @@ function renderImportView(): string {
       </fieldset>
 
       <fieldset class="tui-panel">
-        <legend class="tui-legend">${escapeHtml(tr.importLogTitle)}</legend>
-        <div class="form-stack">
-          <div class="c-muted">${escapeHtml(tr.importLogDesc)}</div>
-          <div class="row">
-            <input id="custom-log-path" class="grow" placeholder="${escapeHtml(tr.importLogPathPlaceholder)}" value="${escapeHtml(state.customLogPath)}" />
-          </div>
-          <div class="row">
-            <button id="btn-read-log" ${state.busy ? "disabled" : ""}>${escapeHtml(tr.importLogBtn)}</button>
-          </div>
-        </div>
-      </fieldset>
-
-      <fieldset class="tui-panel">
-        <legend class="tui-legend">${escapeHtml(tr.importUrlTitle)}</legend>
-        <div class="form-stack">
-          <div class="c-muted">${escapeHtml(tr.importUrlDesc)}</div>
-          <textarea id="url-token-input" rows="3" placeholder="${escapeHtml(tr.importUrlPlaceholder)}">${escapeHtml(state.urlInput)}</textarea>
-          <div class="row">
-            <span class="c-muted">${escapeHtml(tr.serverLabel)}</span>
-            <input id="manual-server-id" style="width:110px;" placeholder="${escapeHtml(tr.manualServerPlaceholder)}" value="${escapeHtml(state.manualServerId)}" />
-            <button id="btn-sync-url" ${state.busy ? "disabled" : ""}>${escapeHtml(tr.syncUrlBtn)}</button>
-          </div>
-        </div>
-      </fieldset>
-
-      <fieldset class="tui-panel">
         <legend class="tui-legend">${escapeHtml(tr.importFileTitle(AKEGF_VERSION))}</legend>
         <div class="form-stack">
           <div class="c-muted">
@@ -1151,7 +1119,7 @@ async function runSyncWithInput(rawInput: string, fallbackProv: Provider, fallba
   render();
 
   try {
-    const parsed = parseGachaUrlOrToken(rawInput, fallbackProv, fallbackSid, locale);
+    const parsed = { u8Token: rawInput.trim(), provider: fallbackProv, serverId: fallbackSid };
     const acc = await queryAccountFromToken(parsed, locale);
     const idx = state.store.accounts.findIndex((a) => a.key === acc.key);
     if (idx >= 0) state.store.accounts[idx] = acc;
@@ -1516,38 +1484,6 @@ function bindEvents(): void {
   document.getElementById("btn-load-demo")?.addEventListener("click", loadDemoData);
   document.getElementById("btn-load-demo-2")?.addEventListener("click", loadDemoData);
 
-  document.getElementById("custom-log-path")?.addEventListener("input", (e) => {
-    state.customLogPath = (e.target as HTMLInputElement).value;
-  });
-
-  document.getElementById("url-token-input")?.addEventListener("input", (e) => {
-    state.urlInput = (e.target as HTMLTextAreaElement).value;
-  });
-
-  document.getElementById("manual-server-id")?.addEventListener("input", (e) => {
-    state.manualServerId = (e.target as HTMLInputElement).value;
-  });
-
-  document.getElementById("btn-read-log")?.addEventListener("click", async () => {
-    const tr = getTr();
-    state.busy = true;
-    setStatus(tr.statusReadingLog);
-    render();
-    try {
-      const res = await detectGachaLog("gryphline", state.customLogPath, state.store.locale || "zh-TW");
-      state.urlInput = res.url;
-      await runSyncWithInput(res.url, res.provider, "auto");
-    } catch (err: any) {
-      state.busy = false;
-      setStatus(tr.statusLogFail(err?.message || String(err)), true);
-      render();
-    }
-  });
-
-  document.getElementById("btn-sync-url")?.addEventListener("click", async () => {
-    await runSyncWithInput(state.urlInput, state.manualProvider, state.manualServerId);
-  });
-
   document.getElementById("btn-trigger-import")?.addEventListener("click", () => {
     document.getElementById("file-import-json")?.click();
   });
@@ -1730,7 +1666,7 @@ async function runDownloadUpdate() {
   render();
 
   try {
-    const savedPath = await downloadAppUpdate(info.downloadUrl, info.assetName, (p) => {
+    const savedPath = await downloadAppUpdate(info.downloadUrl, info.assetName, info.checksumUrl, (p) => {
       state.updateDownloadedBytes = p.downloaded;
       state.updateTotalBytes = p.total ?? state.updateTotalBytes;
       state.updateDownloadPercent = p.percent;

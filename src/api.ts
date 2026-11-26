@@ -351,20 +351,6 @@ export async function exchangeLoginTokenToAccounts(
   return accounts;
 }
 
-export async function detectGachaLog(
-  provider?: Provider,
-  customPath?: string,
-  locale: Locale = "zh-TW",
-): Promise<LogDetectionResult> {
-  if (!isTauriEnv()) {
-    throw new Error(TRANSLATIONS[locale].errBrowserLog);
-  }
-  return invoke<LogDetectionResult>("detect_gacha_log", {
-    provider: provider ?? null,
-    customPath: customPath?.trim() ? customPath.trim() : null,
-  });
-}
-
 async function httpGetJson<T = any>(url: string): Promise<T> {
   if (isTauriEnv()) {
     return invoke<T>("http_get_json", { url });
@@ -391,41 +377,6 @@ export interface ParsedGachaInput {
   u8Token: string;
   provider: Provider;
   serverId: string;
-}
-
-export function parseGachaUrlOrToken(
-  input: string,
-  fallbackProvider: Provider = "gryphline",
-  fallbackServerId = "auto",
-  locale: Locale = "zh-TW",
-): ParsedGachaInput {
-  const tr = TRANSLATIONS[locale];
-  const trimmed = input.trim();
-  if (!trimmed) throw new Error(tr.errEmptyInput);
-
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-    const url = new URL(trimmed);
-    const params = url.searchParams;
-    const u8Token = params.get("u8_token") || params.get("token") || "";
-    if (!u8Token) throw new Error(tr.errMissingTokenParam);
-
-    const provider: Provider = url.hostname.includes("hypergryph.com")
-      ? "hypergryph"
-      : "gryphline";
-    const serverId =
-      params.get("server_id") ||
-      params.get("serverId") ||
-      params.get("server") ||
-      fallbackServerId;
-
-    return { u8Token, provider, serverId };
-  }
-
-  return {
-    u8Token: trimmed,
-    provider: fallbackProvider,
-    serverId: fallbackServerId,
-  };
 }
 
 export async function queryAccountFromToken(
@@ -816,6 +767,7 @@ export interface UpdateCheckResult {
   releaseUrl: string;
   assetName: string | null;
   downloadUrl: string | null;
+  checksumUrl: string | null;
   assetSize: number | null;
 }
 
@@ -835,6 +787,7 @@ export async function checkAppUpdate(): Promise<UpdateCheckResult> {
 export async function downloadAppUpdate(
   url: string,
   assetName: string,
+  checksumUrl: string | null,
   onProgress?: (p: UpdateDownloadProgress) => void,
 ): Promise<string> {
   if (!isTauriEnv()) {
@@ -847,7 +800,7 @@ export async function downloadAppUpdate(
     });
   }
   try {
-    return await invoke<string>("download_app_update", { url, assetName });
+    return await invoke<string>("download_app_update", { url, assetName, checksumUrl });
   } finally {
     if (unlisten) unlisten();
   }
